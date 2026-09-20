@@ -43,6 +43,10 @@ internal sealed class ProjectileTracer
 		PreviousPosition = Position;
 		Position += Velocity * elapsedSeconds;
 		Lifetime += elapsedSeconds;
-		return Lifetime < MaxLifetime && Position.Z < 90f;
+
+		// Lifetime alone bounds the range now. The old "Position.Z < 90" test was a
+		// leftover from screen space and killed shots early once the player rotated
+		// or walked far along world Z.
+		return Lifetime < MaxLifetime;
 	}
 }

@@ -13,6 +13,15 @@ internal sealed class GameForm : Form
 	private readonly System.Windows.Forms.Timer combatTimer;
 	private readonly Stopwatch frameClock = Stopwatch.StartNew();
 	private readonly List<ProjectileTracer> tracers = new();
+	private readonly ParticleField particles = new();
+	private CameraView? activeView;
+	private Enemy? enemy;
+	private float playerHealth = PlayerMaxHealth;
+	private int score;
+	private bool gameOver;
+	private float gameOverInputDelay;
+	private float damageFlash;
+	private float targetDownBanner;
 	private RawMouseInput? rawMouseInput;
 	private int wmInputCount;
 	private AssignmentState assignmentState = AssignmentState.WaitingForLeft;
@@ -47,6 +56,12 @@ internal sealed class GameForm : Form
 	private const float MinimumPitch = -1.35f;
 	private const float MaximumPitch = 1.35f;
 	private const float WheelStep = 120f;
+	private const float PlayerMaxHealth = 100f;
+	private const float ProjectileDamage = 14f;
+	private const float HeadshotMultiplier = 2f;
+	private const float DamageFlashDuration = 0.45f;
+	private const float TargetDownBannerDuration = 3.2f;
+	private const float GameOverInputDelay = 0.9f;
 
 	public GameForm()
 	{
@@ -57,6 +72,7 @@ internal sealed class GameForm : Form
 		BackColor = Color.FromArgb(9, 15, 24);
 		ForeColor = Color.FromArgb(225, 239, 247);
 		DoubleBuffered = true;
+		KeyPreview = true;
 		SetStyle(ControlStyles.ResizeRedraw, true);
 		fireIndicatorTimer = new System.Windows.Forms.Timer { Interval = 450 };
 		fireIndicatorTimer.Tick += ClearFireIndicator;
@@ -74,7 +90,56 @@ internal sealed class GameForm : Form
 		base.OnLoad(e);
 		rawMouseInput = new RawMouseInput(Handle);
 		rawMouseInput.MouseMoved += OnRawMouseMoved;
+		SpawnEnemy();
 		combatTimer.Start();
+	}
+
+	protected override void OnKeyDown(KeyEventArgs e)
+	{
+		base.OnKeyDown(e);
+
+		if (e.KeyCode == Keys.R && assignmentState == AssignmentState.BothHandsReady)
+		{
+			RestartRound();
+			e.Handled = true;
+		}
+	}
+
+	/// <summary>Drops a single exosuit ahead of the player's current facing direction.</summary>
+	private void SpawnEnemy()
+	{
+		Vector3 groundForward = GetCameraForwardOnGround();
+		Vector3 spawnPosition = playerPosition + (groundForward * Enemy.SpawnDistance);
+		// Face the player immediately so it does not spin on the first frame.
+		float facing = MathF.Atan2(-groundForward.X, -groundForward.Z);
+		enemy = new Enemy(new Vector3(spawnPosition.X, 0f, spawnPosition.Z), facing);
+	}
+
+	private void RestartRound()
+	{
+		playerPosition = Vector3.Zero;
+		cameraYaw = 0f;
+		cameraPitch = 0f;
+		cameraControlHeld = false;
+		movementDirection = 0;
+		leftFireHeld = false;
+		rightFireHeld = false;
+		leftFireCooldown = 0f;
+		rightFireCooldown = 0f;
+		leftRecoil = 0f;
+		rightRecoil = 0f;
+		leftMuzzleFlash = 0f;
+		rightMuzzleFlash = 0f;
+		playerHealth = PlayerMaxHealth;
+		score = 0;
+		gameOver = false;
+		gameOverInputDelay = 0f;
+		damageFlash = 0f;
+		targetDownBanner = 0f;
+		tracers.Clear();
+		particles.Clear();
+		SpawnEnemy();
+		Invalidate();
 	}
 
 	protected override void WndProc(ref Message message)
@@ -126,6 +191,17 @@ internal sealed class GameForm : Form
 
 		if (assignmentState != AssignmentState.BothHandsReady)
 		{
+			return;
+		}
+
+		if (gameOver)
+		{
+			const int anyFireButton = RawMouseInput.LeftButtonDown | RawMouseInput.RightButtonDown;
+			if (gameOverInputDelay <= 0f && (movement.ButtonFlags & anyFireButton) != 0)
+			{
+				RestartRound();
+			}
+
 			return;
 		}
 
@@ -234,6 +310,23 @@ internal sealed class GameForm : Form
 			return;
 		}
 
+		damageFlash = MathF.Max(0f, damageFlash - elapsedSeconds);
+		targetDownBanner = MathF.Max(0f, targetDownBanner - elapsedSeconds);
+		particles.Update(elapsedSeconds);
+
+		if (gameOver)
+		{
+			gameOverInputDelay = MathF.Max(0f, gameOverInputDelay - elapsedSeconds);
+			UpdateTracers(elapsedSeconds);
+			if (enemy is { State: EnemyState.Dying })
+			{
+				enemy.Update(elapsedSeconds, playerPosition);
+			}
+
+			Invalidate();
+			return;
+		}
+
 		if (cameraControlHeld && movementDirection != 0)
 		{
 			Vector3 groundForward = GetCameraForwardOnGround();
@@ -255,15 +348,85 @@ internal sealed class GameForm : Form
 			TryFireRightWeapon();
 		}
 
-		for (int index = tracers.Count - 1; index >= 0; index--)
-		{
-			if (!tracers[index].Update(elapsedSeconds))
-			{
-				tracers.RemoveAt(index);
-			}
-		}
+		UpdateEnemy(elapsedSeconds);
+		UpdateTracers(elapsedSeconds);
 
 		Invalidate();
+	}
+
+	private void UpdateEnemy(float elapsedSeconds)
+	{
+		if (enemy is null)
+		{
+			return;
+		}
+
+		float damage = enemy.Update(elapsedSeconds, playerPosition);
+		if (damage > 0f)
+		{
+			ApplyPlayerDamage(damage);
+		}
+
+		if (enemy.State == EnemyState.Dead)
+		{
+			enemy = null;
+		}
+	}
+
+	/// <summary>
+	/// Advances every projectile and tests its swept world-space segment against the
+	/// enemy capsule. Collision is pure XYZ - no screen rectangles are involved.
+	/// </summary>
+	private void UpdateTracers(float elapsedSeconds)
+	{
+		for (int index = tracers.Count - 1; index >= 0; index--)
+		{
+			ProjectileTracer tracer = tracers[index];
+			if (!tracer.Update(elapsedSeconds))
+			{
+				tracers.RemoveAt(index);
+				continue;
+			}
+
+			if (enemy is null || !enemy.IsAlive)
+			{
+				continue;
+			}
+
+			if (!enemy.TryHit(tracer.PreviousPosition, tracer.Position, out Vector3 hitPoint, out bool headshot))
+			{
+				continue;
+			}
+
+			particles.SpawnImpact(hitPoint, tracer.Color);
+			tracers.RemoveAt(index);
+
+			float damage = headshot ? ProjectileDamage * HeadshotMultiplier : ProjectileDamage;
+			if (enemy.TakeDamage(damage))
+			{
+				particles.SpawnDestruction(enemy.ChestPosition);
+				score += Enemy.ScoreValue;
+				targetDownBanner = TargetDownBannerDuration;
+			}
+		}
+	}
+
+	private void ApplyPlayerDamage(float amount)
+	{
+		playerHealth = MathF.Max(0f, playerHealth - amount);
+		damageFlash = DamageFlashDuration;
+
+		if (playerHealth > 0f)
+		{
+			return;
+		}
+
+		gameOver = true;
+		gameOverInputDelay = GameOverInputDelay;
+		leftFireHeld = false;
+		rightFireHeld = false;
+		movementDirection = 0;
+		cameraControlHeld = false;
 	}
 
 	private void TryFireLeftWeapon()
@@ -325,20 +488,60 @@ internal sealed class GameForm : Form
 		}
 		else
 		{
+			CameraView view = CreateCameraView();
+			activeView = view;
+
 			DrawFirstPersonBattlefield(graphics);
+
+			// World objects, drawn before the first-person weapons so the arms stay in front.
+			if (enemy is not null)
+			{
+				EnemyRenderer.Draw(graphics, enemy, view);
+			}
+
+			particles.Draw(graphics, view);
+			DrawTracers(graphics);
+
+			if (enemy is not null)
+			{
+				EnemyRenderer.DrawHealthBar(graphics, enemy, view, detailFont);
+				DrawOffscreenEnemyMarker(graphics, view);
+			}
+
+			activeView = null;
+
 			DrawCenteredText(graphics, "BOTH HANDS READY", instructionFont, 28, Color.FromArgb(96, 239, 228));
 			DrawCenteredText(graphics, $"LEFT ARM: {leftAssignment?.DeviceName}    RIGHT ARM: {rightAssignment?.DeviceName}", detailFont, 78, Color.FromArgb(190, 210, 218));
 			DrawWeapon(graphics, LeftWeaponPosition, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT WEAPON", leftRecoil, leftMuzzleFlash);
 			DrawWeapon(graphics, RightWeaponPosition, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT WEAPON", rightRecoil, rightMuzzleFlash);
-			DrawTracers(graphics);
 			DrawCrosshair(graphics, leftCrosshair, Color.FromArgb(96, 239, 228), "LEFT");
 			DrawCrosshair(graphics, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT");
 			using var readyBrush = new SolidBrush(Color.FromArgb(142, 174, 188));
 			graphics.DrawString("LEFT ARM: READY", detailFont, readyBrush, 90, 106);
 			graphics.DrawString("RIGHT ARM: READY", detailFont, readyBrush, ClientSize.Width - 235, 106);
-			if (fireIndicator is not null)
+			DrawPlayerStatus(graphics);
+
+			if (fireIndicator is not null && !gameOver)
 			{
 				DrawCenteredText(graphics, fireIndicator, instructionFont, ClientSize.Height - 72, Color.FromArgb(255, 220, 120));
+			}
+
+			if (damageFlash > 0f)
+			{
+				int alpha = (int)Math.Clamp(damageFlash / DamageFlashDuration * 92f, 0f, 92f);
+				using var hurtBrush = new SolidBrush(Color.FromArgb(alpha, 168, 26, 32));
+				graphics.FillRectangle(hurtBrush, ClientRectangle);
+			}
+
+			if (targetDownBanner > 0f && !gameOver)
+			{
+				DrawCenteredText(graphics, "TARGET DESTROYED", instructionFont, 148, Color.FromArgb(255, 220, 120));
+				DrawCenteredText(graphics, "PRESS R TO REDEPLOY", detailFont, 186, Color.FromArgb(170, 198, 208));
+			}
+
+			if (gameOver)
+			{
+				DrawGameOver(graphics);
 			}
 		}
 
@@ -350,15 +553,16 @@ internal sealed class GameForm : Form
 
 	private void DrawFirstPersonBattlefield(Graphics graphics)
 	{
-		float horizon = ClientSize.Height * 0.43f;
-		using var horizonPen = new Pen(Color.FromArgb(59, 151, 157), 2);
-		graphics.DrawLine(horizonPen, 0, horizon, ClientSize.Width, horizon);
+		float horizon = GetHorizonY();
 		using var floorBrush = new SolidBrush(Color.FromArgb(8, 22, 29));
-		graphics.FillPolygon(floorBrush, new[]
+		if (horizon < ClientSize.Height)
 		{
-			new PointF(0, horizon), new PointF(ClientSize.Width, horizon),
-			new PointF(ClientSize.Width, ClientSize.Height), new PointF(0, ClientSize.Height)
-		});
+			graphics.FillPolygon(floorBrush, new[]
+			{
+				new PointF(0, horizon), new PointF(ClientSize.Width, horizon),
+				new PointF(ClientSize.Width, ClientSize.Height), new PointF(0, ClientSize.Height)
+			});
+		}
 
 		DrawPerspectiveGrid(graphics, horizon);
 		DrawStructure(graphics, -7.2f, 1.4f, 4.2f, 9f, Color.FromArgb(24, 61, 72));
@@ -376,49 +580,66 @@ internal sealed class GameForm : Form
 		using var gridPen = new Pen(Color.FromArgb(22, 67, 76), 1);
 		for (int index = -12; index <= 12; index++)
 		{
-			graphics.DrawLine(gridPen, Project(index * 1.5f, 0f, 2.5f), Project(index * 1.5f, 0f, 38f));
+			DrawWorldLine(graphics, gridPen, new Vector3(index * 1.5f, 0f, 2.5f), new Vector3(index * 1.5f, 0f, 38f));
 		}
 
 		foreach (float depth in new[] { 3f, 4f, 5.5f, 7.5f, 10f, 14f, 19f, 26f, 35f })
 		{
-			graphics.DrawLine(gridPen, Project(-18f, 0f, depth), Project(18f, 0f, depth));
+			DrawWorldLine(graphics, gridPen, new Vector3(-18f, 0f, depth), new Vector3(18f, 0f, depth));
 		}
 
 		using var horizonPen = new Pen(Color.FromArgb(59, 151, 157), 2);
-		graphics.DrawLine(horizonPen, 0, horizon, ClientSize.Width, horizon);
+		if (horizon > -8f && horizon < ClientSize.Height + 8f)
+		{
+			graphics.DrawLine(horizonPen, 0, horizon, ClientSize.Width, horizon);
+		}
+	}
+
+	private void DrawWorldLine(Graphics graphics, Pen pen, Vector3 start, Vector3 end)
+	{
+		if (TryProjectSegment(start, end, out PointF first, out PointF second))
+		{
+			graphics.DrawLine(pen, first, second);
+		}
 	}
 
 	private void DrawStructure(Graphics graphics, float x, float halfWidth, float height, float depth, Color color)
 	{
-		PointF frontTopLeft = Project(x - halfWidth, height, depth - 0.6f);
-		PointF frontTopRight = Project(x + halfWidth, height, depth - 0.6f);
-		PointF frontBottomLeft = Project(x - halfWidth, 0f, depth - 0.6f);
-		PointF frontBottomRight = Project(x + halfWidth, 0f, depth - 0.6f);
-		PointF backTopRight = Project(x + halfWidth, height, depth + 0.6f);
-		PointF backBottomRight = Project(x + halfWidth, 0f, depth + 0.6f);
+		CameraView view = activeView ?? CreateCameraView();
+		Vector3 frontTopLeft = new(x - halfWidth, height, depth - 0.6f);
+		Vector3 frontTopRight = new(x + halfWidth, height, depth - 0.6f);
+		Vector3 frontBottomLeft = new(x - halfWidth, 0f, depth - 0.6f);
+		Vector3 frontBottomRight = new(x + halfWidth, 0f, depth - 0.6f);
+		Vector3 backTopRight = new(x + halfWidth, height, depth + 0.6f);
+		Vector3 backBottomRight = new(x + halfWidth, 0f, depth + 0.6f);
+
 		using var frontBrush = new SolidBrush(color);
 		using var sideBrush = new SolidBrush(Color.FromArgb(Math.Max(10, color.R - 10), Math.Max(15, color.G - 12), Math.Max(20, color.B - 12)));
 		using var edgePen = new Pen(Color.FromArgb(86, 177, 181), 1);
-		graphics.FillPolygon(frontBrush, new[] { frontTopLeft, frontTopRight, frontBottomRight, frontBottomLeft });
-		graphics.FillPolygon(sideBrush, new[] { frontTopRight, backTopRight, backBottomRight, frontBottomRight });
-		graphics.DrawPolygon(edgePen, new[] { frontTopLeft, frontTopRight, frontBottomRight, frontBottomLeft });
-		graphics.DrawLine(edgePen, frontTopRight, backTopRight);
+
+		if (view.TryProjectPolygon(new[] { frontTopRight, backTopRight, backBottomRight, frontBottomRight }, out PointF[] sideFace))
+		{
+			graphics.FillPolygon(sideBrush, sideFace);
+		}
+
+		if (view.TryProjectPolygon(new[] { frontTopLeft, frontTopRight, frontBottomRight, frontBottomLeft }, out PointF[] frontFace))
+		{
+			graphics.FillPolygon(frontBrush, frontFace);
+			graphics.DrawPolygon(edgePen, frontFace);
+		}
+
+		DrawWorldLine(graphics, edgePen, frontTopRight, backTopRight);
 	}
 
 	private void DrawPerspectiveRail(Graphics graphics, float x, float y, float depth, Color color)
 	{
 		using var railPen = new Pen(color, 3);
-		graphics.DrawLine(railPen, Project(x - 0.35f, y, 2.5f), Project(x - 0.35f, y, depth));
-		graphics.DrawLine(railPen, Project(x + 0.35f, y, 2.5f), Project(x + 0.35f, y, depth));
+		DrawWorldLine(graphics, railPen, new Vector3(x - 0.35f, y, 2.5f), new Vector3(x - 0.35f, y, depth));
+		DrawWorldLine(graphics, railPen, new Vector3(x + 0.35f, y, 2.5f), new Vector3(x + 0.35f, y, depth));
 		for (float z = 4f; z < depth; z += 4f)
 		{
-			graphics.DrawLine(railPen, Project(x - 0.35f, y, z), Project(x + 0.35f, y, z));
+			DrawWorldLine(graphics, railPen, new Vector3(x - 0.35f, y, z), new Vector3(x + 0.35f, y, z));
 		}
-	}
-
-	private PointF Project(float x, float y, float z)
-	{
-		return ProjectWorldToScreen(new Vector3(x, y, z));
 	}
 
 	private void DrawWeapon(Graphics graphics, Vector3 weaponPosition, PointF crosshair, Color accent, string label, float recoil, float muzzleFlash)
@@ -479,15 +700,18 @@ internal sealed class GameForm : Form
 
 	private void DrawTracers(Graphics graphics)
 	{
+		Vector3 cameraPosition = playerPosition + new Vector3(0f, CameraHeight, 0f);
+
 		foreach (ProjectileTracer tracer in tracers)
 		{
-			if (!TryProjectWorldToScreen(tracer.PreviousPosition, out PointF tail) ||
-				!TryProjectWorldToScreen(tracer.Position, out PointF position))
+			if (!TryProjectSegment(tracer.PreviousPosition, tracer.Position, out PointF tail, out PointF position))
 			{
 				continue;
 			}
 
-			float depthScale = Math.Clamp(2.5f / MathF.Max(0.5f, tracer.Position.Z), 0.35f, 2.5f);
+			// Thickness follows true distance from the camera, not raw world Z.
+			float distance = Vector3.Distance(tracer.Position, cameraPosition);
+			float depthScale = Math.Clamp(2.5f / MathF.Max(0.5f, distance), 0.35f, 2.5f);
 			using var glowPen = new Pen(Color.FromArgb(70, tracer.Color.R, tracer.Color.G, tracer.Color.B), 9f * depthScale);
 			using var tracerPen = new Pen(tracer.Color, 3f * depthScale);
 			graphics.DrawLine(glowPen, tail, position);
@@ -507,24 +731,67 @@ internal sealed class GameForm : Form
 
 	private PointF ProjectWorldToScreen(Vector3 worldPosition)
 	{
-		Vector3 relative = WorldToCameraLocal(worldPosition);
-		float depth = MathF.Max(0.25f, relative.Z);
-		return new PointF(
-			(ClientSize.Width * 0.5f) + (relative.X * FocalLength / depth),
-			(ClientSize.Height * 0.43f) - (relative.Y * FocalLength / depth));
+		return ProjectCameraLocalToScreen(WorldToCameraLocal(worldPosition));
 	}
 
-	private bool TryProjectWorldToScreen(Vector3 worldPosition, out PointF screenPosition)
+	private PointF ProjectCameraLocalToScreen(Vector3 relative)
 	{
-		Vector3 relative = WorldToCameraLocal(worldPosition);
-		if (relative.Z <= 0.1f)
+		float depth = MathF.Max(0.25f, relative.Z);
+		// Clamped so geometry grazing the near plane cannot produce absurd
+		// coordinates that stall GDI+ with multi-million pixel line spans.
+		return new PointF(
+			Math.Clamp((ClientSize.Width * 0.5f) + (relative.X * FocalLength / depth), -25000f, 25000f),
+			Math.Clamp((ClientSize.Height * 0.43f) - (relative.Y * FocalLength / depth), -25000f, 25000f));
+	}
+
+	/// <summary>Builds the per-frame camera snapshot shared by every world renderer.</summary>
+	private CameraView CreateCameraView()
+	{
+		return new CameraView(
+			playerPosition + new Vector3(0f, CameraHeight, 0f),
+			RotateCameraLocal(Vector3.UnitX),
+			RotateCameraLocal(Vector3.UnitY),
+			RotateCameraLocal(Vector3.UnitZ),
+			ClientSize,
+			WorldToCameraLocal,
+			ProjectCameraLocalToScreen);
+	}
+
+	/// <summary>Projects a world segment, clipping it against the near plane first.</summary>
+	private bool TryProjectSegment(Vector3 start, Vector3 end, out PointF first, out PointF second)
+	{
+		first = PointF.Empty;
+		second = PointF.Empty;
+		Vector3 viewStart = WorldToCameraLocal(start);
+		Vector3 viewEnd = WorldToCameraLocal(end);
+
+		if (viewStart.Z < CameraView.NearPlane && viewEnd.Z < CameraView.NearPlane)
 		{
-			screenPosition = PointF.Empty;
 			return false;
 		}
 
-		screenPosition = ProjectWorldToScreen(worldPosition);
+		if (viewStart.Z < CameraView.NearPlane)
+		{
+			viewStart = Vector3.Lerp(viewStart, viewEnd, (CameraView.NearPlane - viewStart.Z) / (viewEnd.Z - viewStart.Z));
+		}
+		else if (viewEnd.Z < CameraView.NearPlane)
+		{
+			viewEnd = Vector3.Lerp(viewEnd, viewStart, (CameraView.NearPlane - viewEnd.Z) / (viewStart.Z - viewEnd.Z));
+		}
+
+		first = ProjectCameraLocalToScreen(viewStart);
+		second = ProjectCameraLocalToScreen(viewEnd);
 		return true;
+	}
+
+	/// <summary>
+	/// Screen height of the true horizon for the current pitch. The ground plane
+	/// meets infinity here, so the floor now falls away correctly when looking up.
+	/// </summary>
+	private float GetHorizonY()
+	{
+		float horizon = (ClientSize.Height * 0.43f) + (FocalLength * MathF.Tan(cameraPitch));
+		return Math.Clamp(horizon, -4000f, ClientSize.Height + 4000f);
 	}
 
 	private Vector3 CameraLocalToWorld(Vector3 localPosition)
@@ -640,6 +907,103 @@ internal sealed class GameForm : Form
 		using var brush = new SolidBrush(color);
 		using var format = new StringFormat { Alignment = StringAlignment.Center };
 		graphics.DrawString(label, detailFont, brush, center.X, center.Y + radius + 14, format);
+	}
+
+	private void DrawPlayerStatus(Graphics graphics)
+	{
+		const float barWidth = 224f;
+		const float barHeight = 13f;
+		float left = 90f;
+		float top = ClientSize.Height - 56f;
+
+		using var labelBrush = new SolidBrush(Color.FromArgb(142, 174, 188));
+		graphics.DrawString("SUIT INTEGRITY", detailFont, labelBrush, left, top - 22f);
+
+		using var backdropBrush = new SolidBrush(Color.FromArgb(180, 8, 16, 22));
+		graphics.FillRectangle(backdropBrush, left, top, barWidth, barHeight);
+
+		float fraction = Math.Clamp(playerHealth / PlayerMaxHealth, 0f, 1f);
+		Color fill = fraction > 0.5f
+			? Color.FromArgb(96, 239, 228)
+			: fraction > 0.25f
+				? Color.FromArgb(246, 198, 92)
+				: Color.FromArgb(236, 92, 88);
+
+		using var fillBrush = new SolidBrush(fill);
+		graphics.FillRectangle(fillBrush, left, top, barWidth * fraction, barHeight);
+
+		using var framePen = new Pen(Color.FromArgb(120, 168, 196, 208), 1f);
+		graphics.DrawRectangle(framePen, left, top, barWidth, barHeight);
+
+		using var valueBrush = new SolidBrush(Color.FromArgb(205, 225, 239, 247));
+		graphics.DrawString($"{(int)MathF.Ceiling(playerHealth)} / {(int)PlayerMaxHealth}", detailFont, valueBrush, left + barWidth + 12f, top - 3f);
+		graphics.DrawString($"SCORE: {score:D6}", detailFont, labelBrush, ClientSize.Width - 235f, 128f);
+	}
+
+	private void DrawGameOver(Graphics graphics)
+	{
+		using var scrimBrush = new SolidBrush(Color.FromArgb(198, 6, 10, 16));
+		graphics.FillRectangle(scrimBrush, ClientRectangle);
+		DrawCenteredText(graphics, "GAME OVER", titleFont, (ClientSize.Height * 0.5f) - 96f, Color.FromArgb(236, 92, 88));
+		DrawCenteredText(graphics, $"FINAL SCORE: {score:D6}", instructionFont, (ClientSize.Height * 0.5f) - 20f, Color.FromArgb(225, 239, 247));
+		DrawCenteredText(graphics, "PRESS R OR CLICK EITHER MOUSE TO REDEPLOY", detailFont, (ClientSize.Height * 0.5f) + 36f, Color.FromArgb(170, 198, 208));
+	}
+
+	/// <summary>
+	/// A small chevron at the screen edge when the exosuit is out of view, so the
+	/// player can find it again after turning. Derived from the camera-space
+	/// direction, so it stays correct even when the target is directly behind.
+	/// </summary>
+	private void DrawOffscreenEnemyMarker(Graphics graphics, CameraView view)
+	{
+		if (enemy is null || !enemy.IsAlive)
+		{
+			return;
+		}
+
+		Vector3 viewPosition = view.ToView(enemy.ChestPosition);
+		bool visible = viewPosition.Z >= CameraView.NearPlane;
+
+		if (visible)
+		{
+			PointF onScreen = ProjectWorldToScreen(enemy.ChestPosition);
+			if (onScreen.X > 20f && onScreen.X < ClientSize.Width - 20f && onScreen.Y > 120f && onScreen.Y < ClientSize.Height - 20f)
+			{
+				return;
+			}
+		}
+
+		float directionX = viewPosition.X;
+		float directionY = -viewPosition.Y;
+		float length = MathF.Sqrt((directionX * directionX) + (directionY * directionY));
+		if (length < 0.0001f)
+		{
+			directionX = 1f;
+			directionY = 0f;
+		}
+		else
+		{
+			directionX /= length;
+			directionY /= length;
+		}
+
+		float centerX = ClientSize.Width * 0.5f;
+		float centerY = ClientSize.Height * 0.5f;
+		float radius = MathF.Min(ClientSize.Width, ClientSize.Height) * 0.34f;
+		float markerX = centerX + (directionX * radius);
+		float markerY = centerY + (directionY * radius);
+		float normalX = -directionY;
+		float normalY = directionX;
+
+		PointF[] chevron =
+		{
+			new(markerX + (directionX * 13f), markerY + (directionY * 13f)),
+			new(markerX - (directionX * 6f) + (normalX * 9f), markerY - (directionY * 6f) + (normalY * 9f)),
+			new(markerX - (directionX * 6f) - (normalX * 9f), markerY - (directionY * 6f) - (normalY * 9f))
+		};
+
+		using var markerBrush = new SolidBrush(Color.FromArgb(150, 236, 92, 88));
+		graphics.FillPolygon(markerBrush, chevron);
 	}
 
 	private void DrawCenteredText(Graphics graphics, string text, Font font, float y, Color color)
