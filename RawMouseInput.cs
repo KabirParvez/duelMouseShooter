@@ -113,20 +113,36 @@ internal sealed class RawMouseInput : IDisposable
 
 			RawMouse mouse = Marshal.PtrToStructure<RawMouse>(IntPtr.Add(buffer, headerSize));
 			Log($"Parsed device handle: {header.Device}");
-			Log($"Parsed mouse flags: 0x{mouse.ButtonFlags:X4}");
+			Log($"Parsed mouse flags: 0x{mouse.Buttons.ButtonFlags:X4}");
 			Log($"Parsed mouse movement: X={mouse.LastX}, Y={mouse.LastY}");
+			Log($"Parsed event: {GetEventType(mouse.Buttons.ButtonFlags, mouse.LastX, mouse.LastY)}");
 			MousePacketCount++;
 			MouseMoved?.Invoke(this, new RawMouseMovement(
 				header.Device,
 				GetDeviceName(header.Device),
 				mouse.LastX,
 				mouse.LastY,
-				mouse.ButtonFlags));
+				mouse.Buttons.ButtonFlags));
 		}
 		finally
 		{
 			Marshal.FreeHGlobal(buffer);
 		}
+	}
+
+	private static string GetEventType(ushort buttonFlags, int deltaX, int deltaY)
+	{
+		if ((buttonFlags & LeftButtonDown) != 0)
+		{
+			return "LEFT BUTTON DOWN";
+		}
+
+		if ((buttonFlags & RightButtonDown) != 0)
+		{
+			return "RIGHT BUTTON DOWN";
+		}
+
+		return deltaX != 0 || deltaY != 0 ? "MOVEMENT" : "OTHER";
 	}
 
 	private static string GetDeviceName(IntPtr deviceHandle)
@@ -212,11 +228,24 @@ internal sealed class RawMouseInput : IDisposable
 	private struct RawMouse
 	{
 		public ushort Flags;
-		public ushort ButtonFlags;
-		public ushort ButtonData;
+		public ushort Padding;
+		public RawMouseButtons Buttons;
 		public uint RawButtons;
 		public int LastX;
 		public int LastY;
 		public uint ExtraInformation;
+	}
+
+	[StructLayout(LayoutKind.Explicit)]
+	private struct RawMouseButtons
+	{
+		[FieldOffset(0)]
+		public uint RawButtons;
+
+		[FieldOffset(0)]
+		public ushort ButtonFlags;
+
+		[FieldOffset(2)]
+		public ushort ButtonData;
 	}
 }
