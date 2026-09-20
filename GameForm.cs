@@ -262,9 +262,6 @@ internal sealed class GameForm : Form
 		using var backgroundBrush = new LinearGradientBrush(ClientRectangle, Color.FromArgb(7, 13, 22), Color.FromArgb(18, 35, 47), 35f);
 		graphics.FillRectangle(backgroundBrush, ClientRectangle);
 
-		using var accentPen = new Pen(Color.FromArgb(35, 205, 203), 2);
-		graphics.DrawLine(accentPen, 64, 92, ClientSize.Width - 64, 92);
-
 		StringFormat centered = new() { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 		using var titleBrush = new SolidBrush(Color.FromArgb(96, 239, 228));
 		graphics.DrawString("LOOP GAME", titleFont, titleBrush, new RectangleF(40, 38, ClientSize.Width - 80, 50), centered);
@@ -281,9 +278,9 @@ internal sealed class GameForm : Form
 		}
 		else
 		{
-			DrawCenteredText(graphics, "BOTH HANDS READY", instructionFont, 145, Color.FromArgb(96, 239, 228));
-			DrawCenteredText(graphics, $"LEFT ARM:  {leftAssignment?.DeviceName}", detailFont, 230, Color.White);
-			DrawCenteredText(graphics, $"RIGHT ARM: {rightAssignment?.DeviceName}", detailFont, 275, Color.White);
+			DrawFirstPersonBattlefield(graphics);
+			DrawCenteredText(graphics, "BOTH HANDS READY", instructionFont, 28, Color.FromArgb(96, 239, 228));
+			DrawCenteredText(graphics, $"LEFT ARM: {leftAssignment?.DeviceName}    RIGHT ARM: {rightAssignment?.DeviceName}", detailFont, 78, Color.FromArgb(190, 210, 218));
 			DrawWeapon(graphics, LeftWeaponMount, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT WEAPON", leftRecoil, leftMuzzleFlash);
 			DrawWeapon(graphics, RightWeaponMount, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT WEAPON", rightRecoil, rightMuzzleFlash);
 			DrawTracers(graphics);
@@ -302,6 +299,84 @@ internal sealed class GameForm : Form
 		{
 			DrawRawInputDiagnostic(graphics);
 		}
+	}
+
+	private void DrawFirstPersonBattlefield(Graphics graphics)
+	{
+		float horizon = ClientSize.Height * 0.43f;
+		using var horizonPen = new Pen(Color.FromArgb(59, 151, 157), 2);
+		graphics.DrawLine(horizonPen, 0, horizon, ClientSize.Width, horizon);
+		using var floorBrush = new SolidBrush(Color.FromArgb(8, 22, 29));
+		graphics.FillPolygon(floorBrush, new[]
+		{
+			new PointF(0, horizon), new PointF(ClientSize.Width, horizon),
+			new PointF(ClientSize.Width, ClientSize.Height), new PointF(0, ClientSize.Height)
+		});
+
+		DrawPerspectiveGrid(graphics, horizon);
+		DrawStructure(graphics, -7.2f, 1.4f, 4.2f, 9f, Color.FromArgb(24, 61, 72));
+		DrawStructure(graphics, 7.2f, 1.4f, 4.2f, 9f, Color.FromArgb(24, 61, 72));
+		DrawStructure(graphics, -4.5f, 0.7f, 3.2f, 17f, Color.FromArgb(31, 55, 64));
+		DrawStructure(graphics, 4.5f, 0.7f, 3.2f, 17f, Color.FromArgb(31, 55, 64));
+		DrawStructure(graphics, -10f, 0.45f, 3.8f, 28f, Color.FromArgb(38, 68, 76));
+		DrawStructure(graphics, 10f, 0.45f, 3.8f, 28f, Color.FromArgb(38, 68, 76));
+		DrawPerspectiveRail(graphics, -3.8f, 0.25f, 32f, Color.FromArgb(47, 133, 143));
+		DrawPerspectiveRail(graphics, 3.8f, 0.25f, 32f, Color.FromArgb(47, 133, 143));
+	}
+
+	private void DrawPerspectiveGrid(Graphics graphics, float horizon)
+	{
+		using var gridPen = new Pen(Color.FromArgb(22, 67, 76), 1);
+		for (int index = -12; index <= 12; index++)
+		{
+			graphics.DrawLine(gridPen, Project(index * 1.5f, 0f, 2.5f), Project(index * 1.5f, 0f, 38f));
+		}
+
+		foreach (float depth in new[] { 3f, 4f, 5.5f, 7.5f, 10f, 14f, 19f, 26f, 35f })
+		{
+			graphics.DrawLine(gridPen, Project(-18f, 0f, depth), Project(18f, 0f, depth));
+		}
+
+		using var horizonPen = new Pen(Color.FromArgb(59, 151, 157), 2);
+		graphics.DrawLine(horizonPen, 0, horizon, ClientSize.Width, horizon);
+	}
+
+	private void DrawStructure(Graphics graphics, float x, float halfWidth, float height, float depth, Color color)
+	{
+		PointF frontTopLeft = Project(x - halfWidth, height, depth - 0.6f);
+		PointF frontTopRight = Project(x + halfWidth, height, depth - 0.6f);
+		PointF frontBottomLeft = Project(x - halfWidth, 0f, depth - 0.6f);
+		PointF frontBottomRight = Project(x + halfWidth, 0f, depth - 0.6f);
+		PointF backTopRight = Project(x + halfWidth, height, depth + 0.6f);
+		PointF backBottomRight = Project(x + halfWidth, 0f, depth + 0.6f);
+		using var frontBrush = new SolidBrush(color);
+		using var sideBrush = new SolidBrush(Color.FromArgb(Math.Max(10, color.R - 10), Math.Max(15, color.G - 12), Math.Max(20, color.B - 12)));
+		using var edgePen = new Pen(Color.FromArgb(86, 177, 181), 1);
+		graphics.FillPolygon(frontBrush, new[] { frontTopLeft, frontTopRight, frontBottomRight, frontBottomLeft });
+		graphics.FillPolygon(sideBrush, new[] { frontTopRight, backTopRight, backBottomRight, frontBottomRight });
+		graphics.DrawPolygon(edgePen, new[] { frontTopLeft, frontTopRight, frontBottomRight, frontBottomLeft });
+		graphics.DrawLine(edgePen, frontTopRight, backTopRight);
+	}
+
+	private void DrawPerspectiveRail(Graphics graphics, float x, float y, float depth, Color color)
+	{
+		using var railPen = new Pen(color, 3);
+		graphics.DrawLine(railPen, Project(x - 0.35f, y, 2.5f), Project(x - 0.35f, y, depth));
+		graphics.DrawLine(railPen, Project(x + 0.35f, y, 2.5f), Project(x + 0.35f, y, depth));
+		for (float z = 4f; z < depth; z += 4f)
+		{
+			graphics.DrawLine(railPen, Project(x - 0.35f, y, z), Project(x + 0.35f, y, z));
+		}
+	}
+
+	private PointF Project(float x, float y, float z)
+	{
+		const float cameraHeight = 1.65f;
+		const float focalLength = 470f;
+		float safeDepth = MathF.Max(0.25f, z);
+		return new PointF(
+			(ClientSize.Width * 0.5f) + (x * focalLength / safeDepth),
+			(ClientSize.Height * 0.43f) - ((y - cameraHeight) * focalLength / safeDepth));
 	}
 
 	private void DrawWeapon(Graphics graphics, PointF mount, PointF aim, Color accent, string label, float recoil, float muzzleFlash)
