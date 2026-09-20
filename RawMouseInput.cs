@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Diagnostics;
 
 namespace LoopGame;
 
@@ -24,8 +23,6 @@ internal sealed class RawMouseInput : IDisposable
 
 	public RawMouseInput(IntPtr windowHandle)
 	{
-		Log("Raw Input registration starts.");
-		Log($"Exact hwnd passed to RegisterRawInputDevices: {windowHandle}");
 		var devices = new RawInputDevice[]
 		{
 			new()
@@ -38,19 +35,14 @@ internal sealed class RawMouseInput : IDisposable
 		};
 
 		uint deviceSize = (uint)Marshal.SizeOf<RawInputDevice>();
-		Log($"Exact RAWINPUTDEVICE size: {deviceSize}");
 		if (!RegisterRawInputDevices(devices, (uint)devices.Length, deviceSize))
 		{
 			RegistrationErrorCode = Marshal.GetLastWin32Error();
-			Log($"RegisterRawInputDevices return value: FALSE");
-			Log($"Marshal.GetLastWin32Error(): {RegistrationErrorCode}");
-			Log("Raw Input registration completes: FAILED.");
+			Console.Error.WriteLine($"Raw Input registration failed. Win32 error: {RegistrationErrorCode}.");
 			return;
 		}
 
 		RegistrationSucceeded = true;
-		Log("RegisterRawInputDevices return value: TRUE");
-		Log("Raw Input registration completes: SUCCESS.");
 	}
 
 	public bool HandlesMessage(int message)
@@ -60,13 +52,11 @@ internal sealed class RawMouseInput : IDisposable
 
 	public void ProcessWindowMessage(IntPtr inputHandle)
 	{
-		Log($"Before calling GetRawInputData. LPARAM={inputHandle}");
 		ProcessInput(inputHandle);
 	}
 
 	private void ProcessInput(IntPtr inputHandle)
 	{
-		Log("Before initial GetRawInputData size query.");
 		uint dataSize = 0;
 		uint queryResult = GetRawInputData(
 			inputHandle,
@@ -74,9 +64,6 @@ internal sealed class RawMouseInput : IDisposable
 			IntPtr.Zero,
 			ref dataSize,
 			(uint)Marshal.SizeOf<RawInputHeader>());
-		Log($"Initial GetRawInputData return value: {queryResult}");
-		Log($"Required buffer size: {dataSize}");
-
 		if (queryResult == uint.MaxValue || dataSize < (uint)Marshal.SizeOf<RawInputHeader>())
 		{
 			return;
@@ -91,8 +78,6 @@ internal sealed class RawMouseInput : IDisposable
 				buffer,
 				ref dataSize,
 				(uint)Marshal.SizeOf<RawInputHeader>());
-			Log($"Actual GetRawInputData return value: {bytesCopied}");
-
 			if (bytesCopied == uint.MaxValue)
 			{
 				return;
@@ -105,17 +90,12 @@ internal sealed class RawMouseInput : IDisposable
 			}
 
 			RawInputHeader header = Marshal.PtrToStructure<RawInputHeader>(buffer);
-			Log($"Parsed RAWINPUT header: Type={header.Type}, Size={header.Size}, Param={header.Param}");
 			if (header.Type != RimTypeMouse)
 			{
 				return;
 			}
 
 			RawMouse mouse = Marshal.PtrToStructure<RawMouse>(IntPtr.Add(buffer, headerSize));
-			Log($"Parsed device handle: {header.Device}");
-			Log($"Parsed mouse flags: 0x{mouse.Buttons.ButtonFlags:X4}");
-			Log($"Parsed mouse movement: X={mouse.LastX}, Y={mouse.LastY}");
-			Log($"Parsed event: {GetEventType(mouse.Buttons.ButtonFlags, mouse.LastX, mouse.LastY)}");
 			MousePacketCount++;
 			MouseMoved?.Invoke(this, new RawMouseMovement(
 				header.Device,
@@ -128,21 +108,6 @@ internal sealed class RawMouseInput : IDisposable
 		{
 			Marshal.FreeHGlobal(buffer);
 		}
-	}
-
-	private static string GetEventType(ushort buttonFlags, int deltaX, int deltaY)
-	{
-		if ((buttonFlags & LeftButtonDown) != 0)
-		{
-			return "LEFT BUTTON DOWN";
-		}
-
-		if ((buttonFlags & RightButtonDown) != 0)
-		{
-			return "RIGHT BUTTON DOWN";
-		}
-
-		return deltaX != 0 || deltaY != 0 ? "MOVEMENT" : "OTHER";
 	}
 
 	private static string GetDeviceName(IntPtr deviceHandle)
@@ -169,13 +134,6 @@ internal sealed class RawMouseInput : IDisposable
 
 		disposed = true;
 		GC.SuppressFinalize(this);
-	}
-
-	internal static void Log(string message)
-	{
-		string line = $"[RAWINPUT] {message}";
-		Debug.WriteLine(line);
-		Console.WriteLine(line);
 	}
 
 	[DllImport("user32.dll", SetLastError = true)]
