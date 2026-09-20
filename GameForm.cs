@@ -21,8 +21,8 @@ internal sealed class GameForm : Form
 	public GameForm()
 	{
 		Text = "Loop Game";
-		ClientSize = new Size(960, 540);
-		MinimumSize = new Size(640, 400);
+		ClientSize = new Size(960, 650);
+		MinimumSize = new Size(700, 600);
 		StartPosition = FormStartPosition.CenterScreen;
 		BackColor = Color.FromArgb(9, 15, 24);
 		ForeColor = Color.FromArgb(225, 239, 247);
@@ -32,9 +32,9 @@ internal sealed class GameForm : Form
 		fireIndicatorTimer.Tick += ClearFireIndicator;
 	}
 
-	protected override void OnHandleCreated(EventArgs e)
+	protected override void OnLoad(EventArgs e)
 	{
-		base.OnHandleCreated(e);
+		base.OnLoad(e);
 		rawMouseInput = new RawMouseInput(Handle);
 		rawMouseInput.MouseMoved += OnRawMouseMoved;
 	}
@@ -110,12 +110,12 @@ internal sealed class GameForm : Form
 	{
 		if ((movement.ButtonFlags & RawMouseInput.LeftButtonDown) != 0)
 		{
-			return "left button";
+			return "left button down";
 		}
 
 		if ((movement.ButtonFlags & RawMouseInput.RightButtonDown) != 0)
 		{
-			return "right button";
+			return "right button down";
 		}
 
 		return movement.DeltaX != 0 || movement.DeltaY != 0 ? "movement" : "other";
@@ -191,15 +191,26 @@ internal sealed class GameForm : Form
 	{
 		string device = lastRawInput is null ? "NONE" : lastRawInput.DeviceHandle.ToString();
 		string flags = lastRawInput is null ? "NONE" : $"0x{lastRawInput.ButtonFlags:X4}";
-		string registration = rawMouseInput?.RegistrationStatus ?? "NOT INITIALIZED";
-		DrawDiagnosticText(graphics, "RAW INPUT DETECTED", 335, Color.FromArgb(255, 220, 120));
-		DrawDiagnosticText(graphics, $"Device: {device}", 360, Color.White);
-		DrawDiagnosticText(graphics, $"Type: {lastRawInputType}", 382, Color.White);
-		DrawDiagnosticText(graphics, $"Flags: {flags}", 404, Color.White);
-		DrawDiagnosticText(graphics, $"WM_INPUT: {rawMouseInput?.WindowMessageCount ?? 0}  MOUSE PACKETS: {rawMouseInput?.MousePacketCount ?? 0}", 426, Color.White);
-		DrawDiagnosticText(graphics, registration, 448, Color.White);
-		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 470, Color.FromArgb(96, 239, 228));
-		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 492, Color.FromArgb(255, 184, 92));
+		string registration = rawMouseInput is null
+			? "RAW INPUT REGISTRATION: NOT INITIALIZED"
+			: $"RAW INPUT REGISTRATION: {(rawMouseInput.RegistrationSucceeded ? "SUCCESS" : "FAILED")}";
+		string registrationError = rawMouseInput is null || rawMouseInput.RegistrationSucceeded
+			? "NONE"
+			: rawMouseInput.RegistrationErrorCode.ToString();
+		DrawDiagnosticText(graphics, "RAW INPUT DETECTED", 312, Color.FromArgb(255, 220, 120));
+		DrawDiagnosticText(graphics, registration, 335, Color.FromArgb(255, 220, 120));
+		DrawDiagnosticText(graphics, $"REGISTRATION ERROR: {registrationError}", 357, Color.White);
+		DrawDiagnosticText(graphics, $"WM_INPUT: {rawMouseInput?.WindowMessageCount ?? 0}", 382, Color.White);
+		DrawDiagnosticText(graphics, $"MOUSE PACKETS: {rawMouseInput?.MousePacketCount ?? 0}", 404, Color.White);
+		DrawDiagnosticText(graphics, $"LAST DEVICE: {device}", 426, Color.White);
+		DrawDiagnosticText(graphics, $"LAST EVENT: {lastRawInputType.ToUpperInvariant()}", 448, Color.White);
+		DrawDiagnosticText(graphics, $"LAST FLAGS: {flags}", 470, Color.White);
+		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 492, Color.FromArgb(96, 239, 228));
+		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 514, Color.FromArgb(255, 184, 92));
+		if (rawMouseInput is not null && rawMouseInput.WindowMessageCount == 0)
+		{
+			DrawDiagnosticText(graphics, "WAITING FOR RAW INPUT...", 536, Color.FromArgb(255, 220, 120));
+		}
 	}
 
 	private void DrawDiagnosticText(Graphics graphics, string text, float y, Color color)

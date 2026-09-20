@@ -5,20 +5,22 @@ namespace LoopGame;
 
 internal sealed class RawMouseInput : IDisposable
 {
+	internal const int WmInput = 0x00FF;
+	internal const ushort LeftButtonDown = 0x0001;
+	internal const ushort RightButtonDown = 0x0004;
+
 	private const uint RidInput = 0x10000003;
 	private const uint RidevInputSink = 0x00000100;
 	private const uint RidiDevicename = 0x20000007;
 	private const uint RimTypeMouse = 0;
-	private const int WmInput = 0x00ff;
-	internal const ushort LeftButtonDown = 0x0001;
-	internal const ushort RightButtonDown = 0x0004;
 
 	private bool disposed;
 
 	public event EventHandler<RawMouseMovement>? MouseMoved;
 	public int WindowMessageCount { get; private set; }
 	public int MousePacketCount { get; private set; }
-	public string RegistrationStatus { get; }
+	public bool RegistrationSucceeded { get; }
+	public int RegistrationErrorCode { get; }
 
 	public RawMouseInput(IntPtr windowHandle)
 	{
@@ -33,13 +35,19 @@ internal sealed class RawMouseInput : IDisposable
 			}
 		};
 
-		if (!RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<RawInputDevice>()))
+		uint deviceSize = (uint)Marshal.SizeOf<RawInputDevice>();
+		if (!RegisterRawInputDevices(devices, (uint)devices.Length, deviceSize))
 		{
-			RegistrationStatus = $"FAILED ({Marshal.GetLastWin32Error()})";
+			RegistrationErrorCode = Marshal.GetLastWin32Error();
 			return;
 		}
 
-		RegistrationStatus = $"REGISTERED HWND {windowHandle}";
+		RegistrationSucceeded = true;
+	}
+
+	public bool HandlesMessage(int message)
+	{
+		return message == WmInput;
 	}
 
 	public void ProcessWindowMessage(IntPtr inputHandle)
@@ -48,15 +56,16 @@ internal sealed class RawMouseInput : IDisposable
 		ProcessInput(inputHandle);
 	}
 
-	public bool HandlesMessage(int message)
-	{
-		return message == WmInput;
-	}
-
 	private void ProcessInput(IntPtr inputHandle)
 	{
 		uint dataSize = 0;
-		uint queryResult = GetRawInputData(inputHandle, RidInput, IntPtr.Zero, ref dataSize, (uint)Marshal.SizeOf<RawInputHeader>());
+		uint queryResult = GetRawInputData(
+			inputHandle,
+			RidInput,
+			IntPtr.Zero,
+			ref dataSize,
+			(uint)Marshal.SizeOf<RawInputHeader>());
+
 		if (queryResult == uint.MaxValue || dataSize < (uint)Marshal.SizeOf<RawInputHeader>())
 		{
 			return;
@@ -65,26 +74,38 @@ internal sealed class RawMouseInput : IDisposable
 		IntPtr buffer = Marshal.AllocHGlobal((int)dataSize);
 		try
 		{
-			if (GetRawInputData(inputHandle, RidInput, buffer, ref dataSize, (uint)Marshal.SizeOf<RawInputHeader>()) == uint.MaxValue)
+			uint bytesCopied = GetRawInputData(
+				inputHandle,
+				RidInput,
+				buffer,
+				ref dataSize,
+				(uint)Marshal.SizeOf<RawInputHeader>());
+
+			if (bytesCopied == uint.MaxValue)
 			{
 				return;
 			}
 
 			int headerSize = Marshal.SizeOf<RawInputHeader>();
-			if (dataSize < headerSize + Marshal.SizeOf<RawMouse>() || Marshal.ReadInt32(buffer) != RimTypeMouse)
+			if (dataSize < (uint)(headerSize + Marshal.SizeOf<RawMouse>()))
 			{
 				return;
 			}
 
 			RawInputHeader header = Marshal.PtrToStructure<RawInputHeader>(buffer);
-			RawMouse mouse = Marshal.PtrToStructure<RawMouse>(IntPtr.Add(buffer, headerSize));
-			IntPtr deviceHandle = header.Device;
-			ushort buttonFlags = mouse.ButtonFlags;
-			int deltaX = mouse.LastX;
-			int deltaY = mouse.LastY;
+			if (header.Type != RimTypeMouse)
+			{
+				return;
+			}
 
+			RawMouse mouse = Marshal.PtrToStructure<RawMouse>(IntPtr.Add(buffer, headerSize));
 			MousePacketCount++;
-			MouseMoved?.Invoke(this, new RawMouseMovement(deviceHandle, GetDeviceName(deviceHandle), deltaX, deltaY, buttonFlags));
+			MouseMoved?.Invoke(this, new RawMouseMovement(
+				header.Device,
+				GetDeviceName(header.Device),
+				mouse.LastX,
+				mouse.LastY,
+				mouse.ButtonFlags));
 		}
 		finally
 		{
@@ -120,31 +141,31 @@ internal sealed class RawMouseInput : IDisposable
 
 	[DllImport("user32.dll", SetLastError = true)]
 	private static extern bool RegisterRawInputDevices(
-		[In] RawInputDevice[] devices,
-		uint deviceCount,
-		uint deviceSize);
+		[In] RawInputDevice[] pRawInputDevices,
+		uint uiNumDevices,
+		uint cbSize);
 
 	[DllImport("user32.dll", SetLastError = true)]
 	private static extern uint GetRawInputData(
-		IntPtr rawInput,
-		uint command,
-		IntPtr data,
-		ref uint size,
-		uint headerSize);
+		IntPtr hRawInput,
+		uint uiCommand,
+		IntPtr pData,
+		ref uint pcbSize,
+		uint cbSizeHeader);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 	private static extern uint GetRawInputDeviceInfo(
-		IntPtr device,
-		uint command,
-		IntPtr data,
-		ref uint size);
+		IntPtr hDevice,
+		uint uiCommand,
+		IntPtr pData,
+		ref uint pcbSize);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 	private static extern uint GetRawInputDeviceInfo(
-		IntPtr device,
-		uint command,
-		StringBuilder data,
-		ref uint size);
+		IntPtr hDevice,
+		uint uiCommand,
+		StringBuilder pData,
+		ref uint pcbSize);
 
 	[StructLayout(LayoutKind.Sequential, Pack = 8)]
 	private struct RawInputDevice
