@@ -53,6 +53,7 @@ internal sealed class GameForm : Form
 	{
 		lastRawInput = movement;
 		lastRawInputType = GetRawInputType(movement);
+		Text = $"Loop Game | Raw Input {lastRawInputType} | Device {movement.DeviceHandle}";
 
 		if (assignmentState == AssignmentState.WaitingForLeft)
 		{
@@ -190,12 +191,15 @@ internal sealed class GameForm : Form
 	{
 		string device = lastRawInput is null ? "NONE" : lastRawInput.DeviceHandle.ToString();
 		string flags = lastRawInput is null ? "NONE" : $"0x{lastRawInput.ButtonFlags:X4}";
+		string registration = rawMouseInput?.RegistrationStatus ?? "NOT INITIALIZED";
 		DrawDiagnosticText(graphics, "RAW INPUT DETECTED", 335, Color.FromArgb(255, 220, 120));
-		DrawDiagnosticText(graphics, $"Device: {device}", 370, Color.White);
-		DrawDiagnosticText(graphics, $"Type: {lastRawInputType}", 395, Color.White);
-		DrawDiagnosticText(graphics, $"Flags: {flags}", 420, Color.White);
-		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 455, Color.FromArgb(96, 239, 228));
-		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 480, Color.FromArgb(255, 184, 92));
+		DrawDiagnosticText(graphics, $"Device: {device}", 360, Color.White);
+		DrawDiagnosticText(graphics, $"Type: {lastRawInputType}", 382, Color.White);
+		DrawDiagnosticText(graphics, $"Flags: {flags}", 404, Color.White);
+		DrawDiagnosticText(graphics, $"WM_INPUT: {rawMouseInput?.WindowMessageCount ?? 0}  MOUSE PACKETS: {rawMouseInput?.MousePacketCount ?? 0}", 426, Color.White);
+		DrawDiagnosticText(graphics, registration, 448, Color.White);
+		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 470, Color.FromArgb(96, 239, 228));
+		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 492, Color.FromArgb(255, 184, 92));
 	}
 
 	private void DrawDiagnosticText(Graphics graphics, string text, float y, Color color)

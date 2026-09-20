@@ -16,6 +16,9 @@ internal sealed class RawMouseInput : IDisposable
 	private bool disposed;
 
 	public event EventHandler<RawMouseMovement>? MouseMoved;
+	public int WindowMessageCount { get; private set; }
+	public int MousePacketCount { get; private set; }
+	public string RegistrationStatus { get; }
 
 	public RawMouseInput(IntPtr windowHandle)
 	{
@@ -32,12 +35,16 @@ internal sealed class RawMouseInput : IDisposable
 
 		if (!RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<RawInputDevice>()))
 		{
-			throw new InvalidOperationException($"Unable to register for raw mouse input. Win32 error: {Marshal.GetLastWin32Error()}.");
+			RegistrationStatus = $"FAILED ({Marshal.GetLastWin32Error()})";
+			return;
 		}
+
+		RegistrationStatus = $"REGISTERED HWND {windowHandle}";
 	}
 
 	public void ProcessWindowMessage(IntPtr inputHandle)
 	{
+		WindowMessageCount++;
 		ProcessInput(inputHandle);
 	}
 
@@ -63,18 +70,20 @@ internal sealed class RawMouseInput : IDisposable
 				return;
 			}
 
-			int headerSize = IntPtr.Size == 8 ? 24 : 16;
-			if (dataSize < headerSize + 24 || Marshal.ReadInt32(buffer) != RimTypeMouse)
+			int headerSize = Marshal.SizeOf<RawInputHeader>();
+			if (dataSize < headerSize + Marshal.SizeOf<RawMouse>() || Marshal.ReadInt32(buffer) != RimTypeMouse)
 			{
 				return;
 			}
 
-			IntPtr deviceHandle = Marshal.ReadIntPtr(buffer, 8);
-			int mouseOffset = headerSize;
-			ushort buttonFlags = (ushort)Marshal.ReadInt16(buffer, mouseOffset + 2);
-			int deltaX = Marshal.ReadInt32(buffer, mouseOffset + 12);
-			int deltaY = Marshal.ReadInt32(buffer, mouseOffset + 16);
+			RawInputHeader header = Marshal.PtrToStructure<RawInputHeader>(buffer);
+			RawMouse mouse = Marshal.PtrToStructure<RawMouse>(IntPtr.Add(buffer, headerSize));
+			IntPtr deviceHandle = header.Device;
+			ushort buttonFlags = mouse.ButtonFlags;
+			int deltaX = mouse.LastX;
+			int deltaY = mouse.LastY;
 
+			MousePacketCount++;
 			MouseMoved?.Invoke(this, new RawMouseMovement(deviceHandle, GetDeviceName(deviceHandle), deltaX, deltaY, buttonFlags));
 		}
 		finally
@@ -137,7 +146,7 @@ internal sealed class RawMouseInput : IDisposable
 		StringBuilder data,
 		ref uint size);
 
-	[StructLayout(LayoutKind.Sequential)]
+	[StructLayout(LayoutKind.Sequential, Pack = 8)]
 	private struct RawInputDevice
 	{
 		public ushort UsagePage;
@@ -146,12 +155,24 @@ internal sealed class RawMouseInput : IDisposable
 		public IntPtr Target;
 	}
 
-	[StructLayout(LayoutKind.Sequential)]
+	[StructLayout(LayoutKind.Sequential, Pack = 8)]
 	private struct RawInputHeader
 	{
 		public uint Type;
 		public uint Size;
 		public IntPtr Device;
 		public IntPtr Param;
+	}
+
+	[StructLayout(LayoutKind.Sequential, Pack = 8)]
+	private struct RawMouse
+	{
+		public ushort Flags;
+		public ushort ButtonFlags;
+		public ushort ButtonData;
+		public uint RawButtons;
+		public int LastX;
+		public int LastY;
+		public uint ExtraInformation;
 	}
 }
