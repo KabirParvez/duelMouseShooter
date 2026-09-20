@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.Numerics;
 
 namespace LoopGame;
 
@@ -28,8 +29,11 @@ internal sealed class GameForm : Form
 	private float rightRecoil;
 	private float leftMuzzleFlash;
 	private float rightMuzzleFlash;
-	private static readonly PointF LeftWeaponMount = new(145, 570);
-	private static readonly PointF RightWeaponMount = new(815, 570);
+	private static readonly Vector3 CameraPosition = new(0f, 1.65f, 0f);
+	private static readonly Vector3 LeftWeaponPosition = new(-0.62f, 1.18f, 0.85f);
+	private static readonly Vector3 RightWeaponPosition = new(0.62f, 1.18f, 0.85f);
+	private const float FocalLength = 470f;
+	private const float AimDistance = 36f;
 	private const ushort LeftButtonUp = 0x0002;
 	private const ushort RightButtonUp = 0x0008;
 
@@ -225,7 +229,7 @@ internal sealed class GameForm : Form
 			return;
 		}
 
-		FireWeapon(LeftWeaponMount, leftCrosshair, Color.FromArgb(82, 226, 255));
+		FireWeapon(LeftWeaponPosition, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT ARM");
 		leftFireCooldown = 0.18f;
 		leftRecoil = 12f;
 		leftMuzzleFlash = 0.08f;
@@ -239,19 +243,17 @@ internal sealed class GameForm : Form
 			return;
 		}
 
-		FireWeapon(RightWeaponMount, rightCrosshair, Color.FromArgb(255, 184, 92));
+		FireWeapon(RightWeaponPosition, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT ARM");
 		rightFireCooldown = 0.18f;
 		rightRecoil = 12f;
 		rightMuzzleFlash = 0.08f;
 		ShowFireIndicator("RIGHT FIRE");
 	}
 
-	private void FireWeapon(PointF mount, PointF aim, Color color)
+	private void FireWeapon(Vector3 weaponPosition, PointF crosshair, Color color, string owner)
 	{
-		PointF direction = GetDirection(mount, aim);
-		PointF muzzle = Add(mount, Multiply(direction, 118f));
-		PointF endpoint = Add(mount, Multiply(direction, 900f));
-		tracers.Add(new ProjectileTracer(muzzle, endpoint, color));
+		Vector3 direction = GetAimDirection(crosshair, weaponPosition);
+		tracers.Add(new ProjectileTracer(weaponPosition + (direction * 0.85f), direction * 42f, color, owner));
 	}
 
 	protected override void OnPaint(PaintEventArgs e)
@@ -281,8 +283,8 @@ internal sealed class GameForm : Form
 			DrawFirstPersonBattlefield(graphics);
 			DrawCenteredText(graphics, "BOTH HANDS READY", instructionFont, 28, Color.FromArgb(96, 239, 228));
 			DrawCenteredText(graphics, $"LEFT ARM: {leftAssignment?.DeviceName}    RIGHT ARM: {rightAssignment?.DeviceName}", detailFont, 78, Color.FromArgb(190, 210, 218));
-			DrawWeapon(graphics, LeftWeaponMount, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT WEAPON", leftRecoil, leftMuzzleFlash);
-			DrawWeapon(graphics, RightWeaponMount, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT WEAPON", rightRecoil, rightMuzzleFlash);
+			DrawWeapon(graphics, LeftWeaponPosition, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT WEAPON", leftRecoil, leftMuzzleFlash);
+			DrawWeapon(graphics, RightWeaponPosition, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT WEAPON", rightRecoil, rightMuzzleFlash);
 			DrawTracers(graphics);
 			DrawCrosshair(graphics, leftCrosshair, Color.FromArgb(96, 239, 228), "LEFT");
 			DrawCrosshair(graphics, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT");
@@ -371,23 +373,20 @@ internal sealed class GameForm : Form
 
 	private PointF Project(float x, float y, float z)
 	{
-		const float cameraHeight = 1.65f;
-		const float focalLength = 470f;
-		float safeDepth = MathF.Max(0.25f, z);
-		return new PointF(
-			(ClientSize.Width * 0.5f) + (x * focalLength / safeDepth),
-			(ClientSize.Height * 0.43f) - ((y - cameraHeight) * focalLength / safeDepth));
+		return ProjectWorldToScreen(new Vector3(x, y, z));
 	}
 
-	private void DrawWeapon(Graphics graphics, PointF mount, PointF aim, Color accent, string label, float recoil, float muzzleFlash)
+	private void DrawWeapon(Graphics graphics, Vector3 weaponPosition, PointF crosshair, Color accent, string label, float recoil, float muzzleFlash)
 	{
-		PointF direction = GetDirection(mount, aim);
-		PointF normal = new(-direction.Y, direction.X);
-		PointF basePoint = Add(mount, Multiply(direction, -recoil));
-		PointF shoulder = Add(basePoint, Multiply(direction, -58f));
-		PointF bodyCenter = Add(basePoint, Multiply(direction, 48f));
-		PointF bodyFront = Add(bodyCenter, Multiply(direction, 34f));
-		PointF bodyBack = Add(bodyCenter, Multiply(direction, -34f));
+		Vector3 direction = GetAimDirection(crosshair, weaponPosition);
+		PointF mount = ProjectWorldToScreen(weaponPosition - (direction * (recoil / 100f)));
+		PointF muzzle = ProjectWorldToScreen(weaponPosition + (direction * 0.85f) - (direction * (recoil / 100f)));
+		PointF shoulder = ProjectWorldToScreen(weaponPosition - (direction * 0.85f) - (direction * (recoil / 100f)));
+		PointF bodyCenter = Midpoint(mount, muzzle);
+		PointF screenDirection = NormalizeScreenDirection(mount, muzzle);
+		PointF normal = new(-screenDirection.Y, screenDirection.X);
+		PointF bodyFront = Add(bodyCenter, Multiply(screenDirection, 34f));
+		PointF bodyBack = Add(bodyCenter, Multiply(screenDirection, -34f));
 
 		using var armPen = new Pen(Color.FromArgb(38, 54, 66), 24);
 		using var armAccentPen = new Pen(Color.FromArgb(76, 101, 115), 6);
@@ -406,12 +405,10 @@ internal sealed class GameForm : Form
 		graphics.FillPolygon(bodyBrush, body);
 		graphics.DrawPolygon(bodyPen, body);
 
-		PointF barrelStart = Add(basePoint, Multiply(direction, 62f));
-		PointF muzzle = Add(basePoint, Multiply(direction, 118f));
 		using var barrelPen = new Pen(Color.FromArgb(18, 24, 31), 14);
 		using var barrelAccentPen = new Pen(accent, 4);
-		graphics.DrawLine(barrelPen, barrelStart, muzzle);
-		graphics.DrawLine(barrelAccentPen, barrelStart, muzzle);
+		graphics.DrawLine(barrelPen, bodyFront, muzzle);
+		graphics.DrawLine(barrelAccentPen, bodyFront, muzzle);
 		graphics.DrawLine(bodyPen, Add(bodyCenter, Multiply(normal, 11f)), Add(bodyCenter, Multiply(normal, -11f)));
 
 		using var labelBrush = new SolidBrush(Color.FromArgb(170, accent.R, accent.G, accent.B));
@@ -421,7 +418,7 @@ internal sealed class GameForm : Form
 		if (muzzleFlash > 0f)
 		{
 			float flashSize = 20f + (muzzleFlash * 90f);
-			PointF flashTip = Add(muzzle, Multiply(direction, flashSize));
+			PointF flashTip = Add(muzzle, Multiply(screenDirection, flashSize));
 			PointF[] flash =
 			{
 				muzzle,
@@ -438,21 +435,63 @@ internal sealed class GameForm : Form
 	{
 		foreach (ProjectileTracer tracer in tracers)
 		{
-			using var glowPen = new Pen(Color.FromArgb(70, tracer.Color.R, tracer.Color.G, tracer.Color.B), 9);
-			using var tracerPen = new Pen(tracer.Color, 3);
-			PointF tail = tracer.GetTailPosition();
-			PointF position = tracer.GetPosition();
+			if (!TryProjectWorldToScreen(tracer.PreviousPosition, out PointF tail) ||
+				!TryProjectWorldToScreen(tracer.Position, out PointF position))
+			{
+				continue;
+			}
+
+			float depthScale = Math.Clamp(2.5f / MathF.Max(0.5f, tracer.Position.Z), 0.35f, 2.5f);
+			using var glowPen = new Pen(Color.FromArgb(70, tracer.Color.R, tracer.Color.G, tracer.Color.B), 9f * depthScale);
+			using var tracerPen = new Pen(tracer.Color, 3f * depthScale);
 			graphics.DrawLine(glowPen, tail, position);
 			graphics.DrawLine(tracerPen, tail, position);
 		}
 	}
 
-	private static PointF GetDirection(PointF from, PointF to)
+	private Vector3 GetAimDirection(PointF crosshair, Vector3 weaponPosition)
+	{
+		Vector3 cameraRay = Vector3.Normalize(new Vector3(
+			(crosshair.X - (ClientSize.Width * 0.5f)) / FocalLength,
+			((ClientSize.Height * 0.43f) - crosshair.Y) / FocalLength,
+			1f));
+		Vector3 aimPoint = CameraPosition + (cameraRay * AimDistance);
+		return Vector3.Normalize(aimPoint - weaponPosition);
+	}
+
+	private PointF ProjectWorldToScreen(Vector3 worldPosition)
+	{
+		Vector3 relative = worldPosition - CameraPosition;
+		float depth = MathF.Max(0.25f, relative.Z);
+		return new PointF(
+			(ClientSize.Width * 0.5f) + (relative.X * FocalLength / depth),
+			(ClientSize.Height * 0.43f) - (relative.Y * FocalLength / depth));
+	}
+
+	private bool TryProjectWorldToScreen(Vector3 worldPosition, out PointF screenPosition)
+	{
+		Vector3 relative = worldPosition - CameraPosition;
+		if (relative.Z <= 0.1f)
+		{
+			screenPosition = PointF.Empty;
+			return false;
+		}
+
+		screenPosition = ProjectWorldToScreen(worldPosition);
+		return true;
+	}
+
+	private static PointF NormalizeScreenDirection(PointF from, PointF to)
 	{
 		float x = to.X - from.X;
 		float y = to.Y - from.Y;
 		float length = MathF.Sqrt((x * x) + (y * y));
 		return length < 0.001f ? new PointF(0, -1) : new PointF(x / length, y / length);
+	}
+
+	private static PointF Midpoint(PointF first, PointF second)
+	{
+		return new PointF((first.X + second.X) * 0.5f, (first.Y + second.Y) * 0.5f);
 	}
 
 	private static PointF Add(PointF point, PointF offset)

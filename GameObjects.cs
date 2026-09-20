@@ -1,5 +1,7 @@
 namespace LoopGame;
 
+using System.Numerics;
+
 internal enum AssignmentState
 {
 	WaitingForLeft,
@@ -18,36 +20,28 @@ internal sealed record RawMouseMovement(
 
 internal sealed class ProjectileTracer
 {
-	public ProjectileTracer(PointF start, PointF end, Color color)
+	public ProjectileTracer(Vector3 position, Vector3 velocity, Color color, string owner)
 	{
-		Start = start;
-		End = end;
+		Position = position;
+		PreviousPosition = position;
+		Velocity = velocity;
 		Color = color;
+		Owner = owner;
 	}
 
-	public PointF Start { get; }
-	public PointF End { get; }
+	public Vector3 Position { get; private set; }
+	public Vector3 PreviousPosition { get; private set; }
+	public Vector3 Velocity { get; }
 	public Color Color { get; }
-	public float Progress { get; private set; }
+	public string Owner { get; }
+	public float Lifetime { get; private set; }
+	public float MaxLifetime { get; } = 1.8f;
 
 	public bool Update(float elapsedSeconds)
 	{
-		Progress += elapsedSeconds / 0.18f;
-		return Progress < 1f;
-	}
-
-	public PointF GetPosition()
-	{
-		return new PointF(
-			Start.X + ((End.X - Start.X) * Progress),
-			Start.Y + ((End.Y - Start.Y) * Progress));
-	}
-
-	public PointF GetTailPosition()
-	{
-		float tailProgress = MathF.Max(0f, Progress - 0.12f);
-		return new PointF(
-			Start.X + ((End.X - Start.X) * tailProgress),
-			Start.Y + ((End.Y - Start.Y) * tailProgress));
+		PreviousPosition = Position;
+		Position += Velocity * elapsedSeconds;
+		Lifetime += elapsedSeconds;
+		return Lifetime < MaxLifetime && Position.Z < 90f;
 	}
 }
