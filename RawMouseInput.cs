@@ -67,14 +67,14 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 			}
 
 			int headerSize = IntPtr.Size == 8 ? 24 : 16;
-			if (dataSize < headerSize + 20 || Marshal.ReadInt32(buffer) != RimTypeMouse)
+			if (dataSize < headerSize + 24 || Marshal.ReadInt32(buffer) != RimTypeMouse)
 			{
 				return;
 			}
 
 			IntPtr deviceHandle = Marshal.ReadIntPtr(buffer, 8);
 			int mouseOffset = headerSize;
-			ushort buttonFlags = (ushort)Marshal.ReadInt16(buffer, mouseOffset + 4);
+			ushort buttonFlags = (ushort)Marshal.ReadInt16(buffer, mouseOffset + 2);
 			int deltaX = Marshal.ReadInt32(buffer, mouseOffset + 12);
 			int deltaY = Marshal.ReadInt32(buffer, mouseOffset + 16);
 

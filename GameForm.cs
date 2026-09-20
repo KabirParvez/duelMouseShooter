@@ -41,7 +41,7 @@ internal sealed class GameForm : Form
 	{
 		if (assignmentState == AssignmentState.WaitingForLeft)
 		{
-			if (movement.DeltaX == 0 && movement.DeltaY == 0)
+			if ((movement.ButtonFlags & RawMouseInput.RightButtonDown) == 0)
 			{
 				return;
 			}
@@ -54,7 +54,7 @@ internal sealed class GameForm : Form
 
 		if (assignmentState == AssignmentState.WaitingForRight && leftAssignment?.DeviceHandle != movement.DeviceHandle)
 		{
-			if (movement.DeltaX == 0 && movement.DeltaY == 0)
+			if ((movement.ButtonFlags & RawMouseInput.LeftButtonDown) == 0)
 			{
 				return;
 			}
@@ -129,12 +129,13 @@ internal sealed class GameForm : Form
 
 		if (assignmentState == AssignmentState.WaitingForLeft)
 		{
-			DrawCenteredText(graphics, "Move the mouse you want to use for your LEFT HAND", instructionFont, 220, Color.White);
+			DrawCenteredText(graphics, "CHOOSE YOUR LEFT ARM", instructionFont, 190, Color.FromArgb(96, 239, 228));
+			DrawCenteredText(graphics, "Right-click the mouse you want to use as your LEFT ARM", instructionFont, 255, Color.White);
 		}
 		else if (assignmentState == AssignmentState.WaitingForRight)
 		{
-			DrawCenteredText(graphics, "LEFT HAND ASSIGNED", instructionFont, 180, Color.FromArgb(96, 239, 228));
-			DrawCenteredText(graphics, "Move the other mouse for your RIGHT HAND", instructionFont, 245, Color.White);
+			DrawCenteredText(graphics, "CHOOSE YOUR RIGHT ARM", instructionFont, 190, Color.FromArgb(96, 239, 228));
+			DrawCenteredText(graphics, "Left-click the other mouse", instructionFont, 255, Color.White);
 		}
 		else
 		{
