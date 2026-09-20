@@ -8,7 +8,10 @@ internal sealed class GameForm : Form
 	private readonly Font instructionFont = new("Segoe UI", 15, FontStyle.Regular);
 	private readonly Font detailFont = new("Consolas", 11, FontStyle.Regular);
 	private readonly System.Windows.Forms.Timer fireIndicatorTimer;
+	private readonly System.Windows.Forms.Timer debugHeartbeatTimer;
 	private RawMouseInput? rawMouseInput;
+	private int wmInputCount;
+	private bool loggedFirstWndProc;
 	private AssignmentState assignmentState = AssignmentState.WaitingForLeft;
 	private MouseAssignment? leftAssignment;
 	private MouseAssignment? rightAssignment;
@@ -20,6 +23,7 @@ internal sealed class GameForm : Form
 
 	public GameForm()
 	{
+		RawMouseInput.Log("GameForm constructor starts.");
 		Text = "Loop Game";
 		ClientSize = new Size(960, 650);
 		MinimumSize = new Size(700, 600);
@@ -30,17 +34,48 @@ internal sealed class GameForm : Form
 		SetStyle(ControlStyles.ResizeRedraw, true);
 		fireIndicatorTimer = new System.Windows.Forms.Timer { Interval = 450 };
 		fireIndicatorTimer.Tick += ClearFireIndicator;
+		debugHeartbeatTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+		debugHeartbeatTimer.Tick += LogHeartbeat;
+		RawMouseInput.Log("GameForm constructor completes.");
+	}
+
+	protected override void OnHandleCreated(EventArgs e)
+	{
+		base.OnHandleCreated(e);
+		RawMouseInput.Log($"GameForm HandleCreated fires. HWND={Handle}");
 	}
 
 	protected override void OnLoad(EventArgs e)
 	{
+		RawMouseInput.Log("GameForm.OnLoad starts.");
 		base.OnLoad(e);
+		RawMouseInput.Log($"GameForm.Handle at OnLoad: {Handle}");
 		rawMouseInput = new RawMouseInput(Handle);
 		rawMouseInput.MouseMoved += OnRawMouseMoved;
+		debugHeartbeatTimer.Start();
+		RawMouseInput.Log($"GameForm HWND = {Handle}");
+		RawMouseInput.Log($"WndProc instance = {GetType().FullName}");
+		RawMouseInput.Log($"IsHandleCreated = {IsHandleCreated}");
+		RawMouseInput.Log($"IsDisposed = {IsDisposed}");
 	}
 
 	protected override void WndProc(ref Message message)
 	{
+		if (!loggedFirstWndProc)
+		{
+			loggedFirstWndProc = true;
+			RawMouseInput.Log($"WndProc is entered. Message={message.Msg}");
+		}
+
+		if (message.Msg == RawMouseInput.WmInput)
+		{
+			wmInputCount++;
+			RawMouseInput.Log("WM_INPUT RECEIVED");
+			RawMouseInput.Log($"WM_INPUT message number: {message.Msg}");
+			RawMouseInput.Log($"WM_INPUT LPARAM: {message.LParam}");
+			RawMouseInput.Log($"WM_INPUT count: {wmInputCount}");
+		}
+
 		if (rawMouseInput?.HandlesMessage(message.Msg) == true)
 		{
 			rawMouseInput.ProcessWindowMessage(message.LParam);
@@ -51,6 +86,8 @@ internal sealed class GameForm : Form
 
 	private void OnRawMouseMoved(object? sender, RawMouseMovement movement)
 	{
+		RawMouseInput.Log($"Assignment state at event: {assignmentState}");
+		RawMouseInput.Log($"Assignment event device: {movement.DeviceHandle}, flags=0x{movement.ButtonFlags:X4}");
 		lastRawInput = movement;
 		lastRawInputType = GetRawInputType(movement);
 		Text = $"Loop Game | Raw Input {lastRawInputType} | Device {movement.DeviceHandle}";
@@ -104,6 +141,11 @@ internal sealed class GameForm : Form
 		}
 
 		Invalidate();
+	}
+
+	private void LogHeartbeat(object? sender, EventArgs e)
+	{
+		RawMouseInput.Log($"Game loop alive. HWND={Handle}");
 	}
 
 	private static string GetRawInputType(RawMouseMovement movement)
@@ -194,20 +236,23 @@ internal sealed class GameForm : Form
 		string registration = rawMouseInput is null
 			? "RAW INPUT REGISTRATION: NOT INITIALIZED"
 			: $"RAW INPUT REGISTRATION: {(rawMouseInput.RegistrationSucceeded ? "SUCCESS" : "FAILED")}";
+		string messageStatus = wmInputCount > 0
+			? "RAW INPUT MESSAGE RECEIVED"
+			: "RAW INPUT MESSAGE RECEIVED: NONE";
 		string registrationError = rawMouseInput is null || rawMouseInput.RegistrationSucceeded
 			? "NONE"
 			: rawMouseInput.RegistrationErrorCode.ToString();
-		DrawDiagnosticText(graphics, "RAW INPUT DETECTED", 312, Color.FromArgb(255, 220, 120));
-		DrawDiagnosticText(graphics, registration, 335, Color.FromArgb(255, 220, 120));
-		DrawDiagnosticText(graphics, $"REGISTRATION ERROR: {registrationError}", 357, Color.White);
-		DrawDiagnosticText(graphics, $"WM_INPUT: {rawMouseInput?.WindowMessageCount ?? 0}", 382, Color.White);
+		DrawDiagnosticText(graphics, registration, 312, Color.FromArgb(255, 220, 120));
+		DrawDiagnosticText(graphics, $"REGISTRATION ERROR: {registrationError}", 334, Color.White);
+		DrawDiagnosticText(graphics, messageStatus, 356, Color.FromArgb(255, 220, 120));
+		DrawDiagnosticText(graphics, $"WM_INPUT: {wmInputCount}", 378, Color.White);
 		DrawDiagnosticText(graphics, $"MOUSE PACKETS: {rawMouseInput?.MousePacketCount ?? 0}", 404, Color.White);
 		DrawDiagnosticText(graphics, $"LAST DEVICE: {device}", 426, Color.White);
 		DrawDiagnosticText(graphics, $"LAST EVENT: {lastRawInputType.ToUpperInvariant()}", 448, Color.White);
 		DrawDiagnosticText(graphics, $"LAST FLAGS: {flags}", 470, Color.White);
 		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 492, Color.FromArgb(96, 239, 228));
 		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 514, Color.FromArgb(255, 184, 92));
-		if (rawMouseInput is not null && rawMouseInput.WindowMessageCount == 0)
+		if (rawMouseInput is not null && wmInputCount == 0)
 		{
 			DrawDiagnosticText(graphics, "WAITING FOR RAW INPUT...", 536, Color.FromArgb(255, 220, 120));
 		}
@@ -244,6 +289,8 @@ internal sealed class GameForm : Form
 		{
 			rawMouseInput?.Dispose();
 			fireIndicatorTimer.Dispose();
+			debugHeartbeatTimer.Stop();
+			debugHeartbeatTimer.Dispose();
 			titleFont.Dispose();
 			instructionFont.Dispose();
 			detailFont.Dispose();
