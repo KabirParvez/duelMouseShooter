@@ -8,9 +8,10 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 	private const uint RidInput = 0x10000003;
 	private const uint RidevInputSink = 0x00000100;
 	private const uint RidiDevicename = 0x20000007;
-	private const uint RidiDeviceInfo = 0x2000000b;
 	private const uint RimTypeMouse = 0;
 	private const int WmInput = 0x00ff;
+	internal const ushort LeftButtonDown = 0x0001;
+	internal const ushort RightButtonDown = 0x0004;
 
 	private bool disposed;
 
@@ -73,15 +74,16 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 
 			IntPtr deviceHandle = Marshal.ReadIntPtr(buffer, 8);
 			int mouseOffset = headerSize;
+			ushort buttonFlags = (ushort)Marshal.ReadInt16(buffer, mouseOffset + 4);
 			int deltaX = Marshal.ReadInt32(buffer, mouseOffset + 12);
 			int deltaY = Marshal.ReadInt32(buffer, mouseOffset + 16);
 
-			if (deltaX == 0 && deltaY == 0)
+			if (deltaX == 0 && deltaY == 0 && buttonFlags == 0)
 			{
 				return;
 			}
 
-			MouseMoved?.Invoke(this, new RawMouseMovement(deviceHandle, GetDeviceName(deviceHandle), deltaX, deltaY));
+			MouseMoved?.Invoke(this, new RawMouseMovement(deviceHandle, GetDeviceName(deviceHandle), deltaX, deltaY, buttonFlags));
 		}
 		finally
 		{

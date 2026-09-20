@@ -9,4 +9,9 @@ internal enum AssignmentState
 
 internal sealed record MouseAssignment(IntPtr DeviceHandle, string DeviceName);
 
-internal sealed record RawMouseMovement(IntPtr DeviceHandle, string DeviceName, int DeltaX, int DeltaY);
+internal sealed record RawMouseMovement(
+	IntPtr DeviceHandle,
+	string DeviceName,
+	int DeltaX,
+	int DeltaY,
+	ushort ButtonFlags);
