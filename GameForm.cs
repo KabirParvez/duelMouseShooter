@@ -8,6 +8,8 @@ internal sealed class GameForm : Form
 	private readonly Font instructionFont = new("Segoe UI", 15, FontStyle.Regular);
 	private readonly Font detailFont = new("Consolas", 11, FontStyle.Regular);
 	private readonly System.Windows.Forms.Timer fireIndicatorTimer;
+	private readonly System.Windows.Forms.Timer combatTimer;
+	private readonly List<ProjectileTracer> tracers = new();
 	private RawMouseInput? rawMouseInput;
 	private int wmInputCount;
 	private AssignmentState assignmentState = AssignmentState.WaitingForLeft;
@@ -18,6 +20,18 @@ internal sealed class GameForm : Form
 	private string? fireIndicator;
 	private RawMouseMovement? lastRawInput;
 	private string lastRawInputType = "none";
+	private bool leftFireHeld;
+	private bool rightFireHeld;
+	private float leftFireCooldown;
+	private float rightFireCooldown;
+	private float leftRecoil;
+	private float rightRecoil;
+	private float leftMuzzleFlash;
+	private float rightMuzzleFlash;
+	private static readonly PointF LeftWeaponMount = new(145, 570);
+	private static readonly PointF RightWeaponMount = new(815, 570);
+	private const ushort LeftButtonUp = 0x0002;
+	private const ushort RightButtonUp = 0x0008;
 
 	public GameForm()
 	{
@@ -31,6 +45,8 @@ internal sealed class GameForm : Form
 		SetStyle(ControlStyles.ResizeRedraw, true);
 		fireIndicatorTimer = new System.Windows.Forms.Timer { Interval = 450 };
 		fireIndicatorTimer.Tick += ClearFireIndicator;
+		combatTimer = new System.Windows.Forms.Timer { Interval = 16 };
+		combatTimer.Tick += UpdateCombat;
 	}
 
 	protected override void OnHandleCreated(EventArgs e)
@@ -43,6 +59,7 @@ internal sealed class GameForm : Form
 		base.OnLoad(e);
 		rawMouseInput = new RawMouseInput(Handle);
 		rawMouseInput.MouseMoved += OnRawMouseMoved;
+		combatTimer.Start();
 	}
 
 	protected override void WndProc(ref Message message)
@@ -102,7 +119,13 @@ internal sealed class GameForm : Form
 			leftCrosshair = MoveCrosshair(leftCrosshair, movement.DeltaX, movement.DeltaY);
 			if ((movement.ButtonFlags & RawMouseInput.RightButtonDown) != 0)
 			{
+				leftFireHeld = true;
+				TryFireLeftWeapon();
 				ShowFireIndicator("LEFT FIRE");
+			}
+			if ((movement.ButtonFlags & RightButtonUp) != 0)
+			{
+				leftFireHeld = false;
 			}
 		}
 		else if (movement.DeviceHandle == rightAssignment?.DeviceHandle)
@@ -110,7 +133,13 @@ internal sealed class GameForm : Form
 			rightCrosshair = MoveCrosshair(rightCrosshair, movement.DeltaX, movement.DeltaY);
 			if ((movement.ButtonFlags & RawMouseInput.LeftButtonDown) != 0)
 			{
+				rightFireHeld = true;
+			TryFireRightWeapon();
 				ShowFireIndicator("RIGHT FIRE");
+			}
+			if ((movement.ButtonFlags & LeftButtonUp) != 0)
+			{
+				rightFireHeld = false;
 			}
 		}
 
@@ -154,6 +183,77 @@ internal sealed class GameForm : Form
 		Invalidate();
 	}
 
+	private void UpdateCombat(object? sender, EventArgs e)
+	{
+		if (assignmentState != AssignmentState.BothHandsReady)
+		{
+			return;
+		}
+
+		const float elapsedSeconds = 0.016f;
+		leftFireCooldown = MathF.Max(0f, leftFireCooldown - elapsedSeconds);
+		rightFireCooldown = MathF.Max(0f, rightFireCooldown - elapsedSeconds);
+		leftRecoil = MathF.Max(0f, leftRecoil - (elapsedSeconds * 70f));
+		rightRecoil = MathF.Max(0f, rightRecoil - (elapsedSeconds * 70f));
+		leftMuzzleFlash = MathF.Max(0f, leftMuzzleFlash - elapsedSeconds);
+		rightMuzzleFlash = MathF.Max(0f, rightMuzzleFlash - elapsedSeconds);
+
+		if (leftFireHeld)
+		{
+			TryFireLeftWeapon();
+		}
+		if (rightFireHeld)
+		{
+			TryFireRightWeapon();
+		}
+
+		for (int index = tracers.Count - 1; index >= 0; index--)
+		{
+			if (!tracers[index].Update(elapsedSeconds))
+			{
+				tracers.RemoveAt(index);
+			}
+		}
+
+		Invalidate();
+	}
+
+	private void TryFireLeftWeapon()
+	{
+		if (leftFireCooldown > 0f)
+		{
+			return;
+		}
+
+		FireWeapon(LeftWeaponMount, leftCrosshair, Color.FromArgb(82, 226, 255));
+		leftFireCooldown = 0.18f;
+		leftRecoil = 12f;
+		leftMuzzleFlash = 0.08f;
+		ShowFireIndicator("LEFT FIRE");
+	}
+
+	private void TryFireRightWeapon()
+	{
+		if (rightFireCooldown > 0f)
+		{
+			return;
+		}
+
+		FireWeapon(RightWeaponMount, rightCrosshair, Color.FromArgb(255, 184, 92));
+		rightFireCooldown = 0.18f;
+		rightRecoil = 12f;
+		rightMuzzleFlash = 0.08f;
+		ShowFireIndicator("RIGHT FIRE");
+	}
+
+	private void FireWeapon(PointF mount, PointF aim, Color color)
+	{
+		PointF direction = GetDirection(mount, aim);
+		PointF muzzle = Add(mount, Multiply(direction, 118f));
+		PointF endpoint = Add(mount, Multiply(direction, 900f));
+		tracers.Add(new ProjectileTracer(muzzle, endpoint, color));
+	}
+
 	protected override void OnPaint(PaintEventArgs e)
 	{
 		base.OnPaint(e);
@@ -184,8 +284,14 @@ internal sealed class GameForm : Form
 			DrawCenteredText(graphics, "BOTH HANDS READY", instructionFont, 145, Color.FromArgb(96, 239, 228));
 			DrawCenteredText(graphics, $"LEFT ARM:  {leftAssignment?.DeviceName}", detailFont, 230, Color.White);
 			DrawCenteredText(graphics, $"RIGHT ARM: {rightAssignment?.DeviceName}", detailFont, 275, Color.White);
+			DrawWeapon(graphics, LeftWeaponMount, leftCrosshair, Color.FromArgb(82, 226, 255), "LEFT WEAPON", leftRecoil, leftMuzzleFlash);
+			DrawWeapon(graphics, RightWeaponMount, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT WEAPON", rightRecoil, rightMuzzleFlash);
+			DrawTracers(graphics);
 			DrawCrosshair(graphics, leftCrosshair, Color.FromArgb(96, 239, 228), "LEFT");
 			DrawCrosshair(graphics, rightCrosshair, Color.FromArgb(255, 184, 92), "RIGHT");
+			using var readyBrush = new SolidBrush(Color.FromArgb(142, 174, 188));
+			graphics.DrawString("LEFT ARM: READY", detailFont, readyBrush, 90, 106);
+			graphics.DrawString("RIGHT ARM: READY", detailFont, readyBrush, ClientSize.Width - 235, 106);
 			if (fireIndicator is not null)
 			{
 				DrawCenteredText(graphics, fireIndicator, instructionFont, ClientSize.Height - 72, Color.FromArgb(255, 220, 120));
@@ -196,6 +302,92 @@ internal sealed class GameForm : Form
 		{
 			DrawRawInputDiagnostic(graphics);
 		}
+	}
+
+	private void DrawWeapon(Graphics graphics, PointF mount, PointF aim, Color accent, string label, float recoil, float muzzleFlash)
+	{
+		PointF direction = GetDirection(mount, aim);
+		PointF normal = new(-direction.Y, direction.X);
+		PointF basePoint = Add(mount, Multiply(direction, -recoil));
+		PointF shoulder = Add(basePoint, Multiply(direction, -58f));
+		PointF bodyCenter = Add(basePoint, Multiply(direction, 48f));
+		PointF bodyFront = Add(bodyCenter, Multiply(direction, 34f));
+		PointF bodyBack = Add(bodyCenter, Multiply(direction, -34f));
+
+		using var armPen = new Pen(Color.FromArgb(38, 54, 66), 24);
+		using var armAccentPen = new Pen(Color.FromArgb(76, 101, 115), 6);
+		graphics.DrawLine(armPen, mount, shoulder);
+		graphics.DrawLine(armAccentPen, mount, shoulder);
+
+		PointF[] body =
+		{
+			Add(bodyBack, Multiply(normal, 22f)),
+			Add(bodyFront, Multiply(normal, 15f)),
+			Add(bodyFront, Multiply(normal, -15f)),
+			Add(bodyBack, Multiply(normal, -22f))
+		};
+		using var bodyBrush = new SolidBrush(Color.FromArgb(28, 39, 49));
+		using var bodyPen = new Pen(accent, 2);
+		graphics.FillPolygon(bodyBrush, body);
+		graphics.DrawPolygon(bodyPen, body);
+
+		PointF barrelStart = Add(basePoint, Multiply(direction, 62f));
+		PointF muzzle = Add(basePoint, Multiply(direction, 118f));
+		using var barrelPen = new Pen(Color.FromArgb(18, 24, 31), 14);
+		using var barrelAccentPen = new Pen(accent, 4);
+		graphics.DrawLine(barrelPen, barrelStart, muzzle);
+		graphics.DrawLine(barrelAccentPen, barrelStart, muzzle);
+		graphics.DrawLine(bodyPen, Add(bodyCenter, Multiply(normal, 11f)), Add(bodyCenter, Multiply(normal, -11f)));
+
+		using var labelBrush = new SolidBrush(Color.FromArgb(170, accent.R, accent.G, accent.B));
+		using var labelFormat = new StringFormat { Alignment = StringAlignment.Center };
+		graphics.DrawString(label, detailFont, labelBrush, bodyCenter.X, bodyCenter.Y + 28, labelFormat);
+
+		if (muzzleFlash > 0f)
+		{
+			float flashSize = 20f + (muzzleFlash * 90f);
+			PointF flashTip = Add(muzzle, Multiply(direction, flashSize));
+			PointF[] flash =
+			{
+				muzzle,
+				Add(muzzle, Multiply(normal, 9f)),
+				flashTip,
+				Add(muzzle, Multiply(normal, -9f))
+			};
+			using var flashBrush = new SolidBrush(Color.FromArgb(210, 255, 228, 142));
+			graphics.FillPolygon(flashBrush, flash);
+		}
+	}
+
+	private void DrawTracers(Graphics graphics)
+	{
+		foreach (ProjectileTracer tracer in tracers)
+		{
+			using var glowPen = new Pen(Color.FromArgb(70, tracer.Color.R, tracer.Color.G, tracer.Color.B), 9);
+			using var tracerPen = new Pen(tracer.Color, 3);
+			PointF tail = tracer.GetTailPosition();
+			PointF position = tracer.GetPosition();
+			graphics.DrawLine(glowPen, tail, position);
+			graphics.DrawLine(tracerPen, tail, position);
+		}
+	}
+
+	private static PointF GetDirection(PointF from, PointF to)
+	{
+		float x = to.X - from.X;
+		float y = to.Y - from.Y;
+		float length = MathF.Sqrt((x * x) + (y * y));
+		return length < 0.001f ? new PointF(0, -1) : new PointF(x / length, y / length);
+	}
+
+	private static PointF Add(PointF point, PointF offset)
+	{
+		return new PointF(point.X + offset.X, point.Y + offset.Y);
+	}
+
+	private static PointF Multiply(PointF point, float scalar)
+	{
+		return new PointF(point.X * scalar, point.Y * scalar);
 	}
 
 	private void DrawRawInputDiagnostic(Graphics graphics)
@@ -258,6 +450,8 @@ internal sealed class GameForm : Form
 		{
 			rawMouseInput?.Dispose();
 			fireIndicatorTimer.Dispose();
+			combatTimer.Stop();
+			combatTimer.Dispose();
 			titleFont.Dispose();
 			instructionFont.Dispose();
 			detailFont.Dispose();
