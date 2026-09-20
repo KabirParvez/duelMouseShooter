@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.Diagnostics;
 using System.Numerics;
 
 namespace LoopGame;
@@ -10,6 +11,7 @@ internal sealed class GameForm : Form
 	private readonly Font detailFont = new("Consolas", 11, FontStyle.Regular);
 	private readonly System.Windows.Forms.Timer fireIndicatorTimer;
 	private readonly System.Windows.Forms.Timer combatTimer;
+	private readonly Stopwatch frameClock = Stopwatch.StartNew();
 	private readonly List<ProjectileTracer> tracers = new();
 	private RawMouseInput? rawMouseInput;
 	private int wmInputCount;
@@ -29,13 +31,22 @@ internal sealed class GameForm : Form
 	private float rightRecoil;
 	private float leftMuzzleFlash;
 	private float rightMuzzleFlash;
-	private static readonly Vector3 CameraPosition = new(0f, 1.65f, 0f);
-	private static readonly Vector3 LeftWeaponPosition = new(-0.62f, 1.18f, 0.85f);
-	private static readonly Vector3 RightWeaponPosition = new(0.62f, 1.18f, 0.85f);
+	private Vector3 playerPosition = Vector3.Zero;
+	private float cameraYaw;
+	private float cameraPitch;
+	private bool cameraControlHeld;
+	private int movementDirection;
+	private long lastFrameTimestamp;
+	private static readonly Vector3 LeftWeaponPosition = new(-0.62f, -0.47f, 0.85f);
+	private static readonly Vector3 RightWeaponPosition = new(0.62f, -0.47f, 0.85f);
 	private const float FocalLength = 470f;
 	private const float AimDistance = 36f;
-	private const ushort LeftButtonUp = 0x0002;
-	private const ushort RightButtonUp = 0x0008;
+	private const float CameraHeight = 1.65f;
+	private const float LookSensitivity = 0.0028f;
+	private const float MovementSpeed = 3.2f;
+	private const float MinimumPitch = -1.35f;
+	private const float MaximumPitch = 1.35f;
+	private const float WheelStep = 120f;
 
 	public GameForm()
 	{
@@ -127,21 +138,44 @@ internal sealed class GameForm : Form
 				TryFireLeftWeapon();
 				ShowFireIndicator("LEFT FIRE");
 			}
-			if ((movement.ButtonFlags & RightButtonUp) != 0)
+			if ((movement.ButtonFlags & RawMouseInput.RightButtonUp) != 0)
 			{
 				leftFireHeld = false;
 			}
 		}
 		else if (movement.DeviceHandle == rightAssignment?.DeviceHandle)
 		{
-			rightCrosshair = MoveCrosshair(rightCrosshair, movement.DeltaX, movement.DeltaY);
+			if (cameraControlHeld)
+			{
+				cameraYaw += movement.DeltaX * LookSensitivity;
+				cameraPitch = Math.Clamp(cameraPitch - (movement.DeltaY * LookSensitivity), MinimumPitch, MaximumPitch);
+			}
+			else
+			{
+				rightCrosshair = MoveCrosshair(rightCrosshair, movement.DeltaX, movement.DeltaY);
+			}
+
+			if ((movement.ButtonFlags & RawMouseInput.MiddleButtonDown) != 0)
+			{
+				cameraControlHeld = true;
+			}
+			if ((movement.ButtonFlags & RawMouseInput.MiddleButtonUp) != 0)
+			{
+				cameraControlHeld = false;
+				movementDirection = 0;
+			}
+			if ((movement.ButtonFlags & RawMouseInput.MouseWheel) != 0 && movement.ButtonData != 0)
+			{
+				movementDirection = Math.Sign((short)movement.ButtonData);
+			}
+
 			if ((movement.ButtonFlags & RawMouseInput.LeftButtonDown) != 0)
 			{
 				rightFireHeld = true;
 			TryFireRightWeapon();
 				ShowFireIndicator("RIGHT FIRE");
 			}
-			if ((movement.ButtonFlags & LeftButtonUp) != 0)
+			if ((movement.ButtonFlags & RawMouseInput.LeftButtonUp) != 0)
 			{
 				rightFireHeld = false;
 			}
@@ -189,12 +223,22 @@ internal sealed class GameForm : Form
 
 	private void UpdateCombat(object? sender, EventArgs e)
 	{
+		long now = frameClock.ElapsedTicks;
+		float elapsedSeconds = lastFrameTimestamp == 0
+			? 0.016f
+			: Math.Clamp((now - lastFrameTimestamp) / (float)Stopwatch.Frequency, 0.001f, 0.05f);
+		lastFrameTimestamp = now;
+
 		if (assignmentState != AssignmentState.BothHandsReady)
 		{
 			return;
 		}
 
-		const float elapsedSeconds = 0.016f;
+		if (cameraControlHeld && movementDirection != 0)
+		{
+			Vector3 groundForward = GetCameraForwardOnGround();
+			playerPosition += groundForward * (movementDirection * MovementSpeed * elapsedSeconds);
+		}
 		leftFireCooldown = MathF.Max(0f, leftFireCooldown - elapsedSeconds);
 		rightFireCooldown = MathF.Max(0f, rightFireCooldown - elapsedSeconds);
 		leftRecoil = MathF.Max(0f, leftRecoil - (elapsedSeconds * 70f));
@@ -252,8 +296,9 @@ internal sealed class GameForm : Form
 
 	private void FireWeapon(Vector3 weaponPosition, PointF crosshair, Color color, string owner)
 	{
+		Vector3 worldWeaponPosition = CameraLocalToWorld(weaponPosition);
 		Vector3 direction = GetAimDirection(crosshair, weaponPosition);
-		tracers.Add(new ProjectileTracer(weaponPosition + (direction * 0.85f), direction * 42f, color, owner));
+		tracers.Add(new ProjectileTracer(worldWeaponPosition + (direction * 0.85f), direction * 42f, color, owner));
 	}
 
 	protected override void OnPaint(PaintEventArgs e)
@@ -379,9 +424,10 @@ internal sealed class GameForm : Form
 	private void DrawWeapon(Graphics graphics, Vector3 weaponPosition, PointF crosshair, Color accent, string label, float recoil, float muzzleFlash)
 	{
 		Vector3 direction = GetAimDirection(crosshair, weaponPosition);
-		PointF mount = ProjectWorldToScreen(weaponPosition - (direction * (recoil / 100f)));
-		PointF muzzle = ProjectWorldToScreen(weaponPosition + (direction * 0.85f) - (direction * (recoil / 100f)));
-		PointF shoulder = ProjectWorldToScreen(weaponPosition - (direction * 0.85f) - (direction * (recoil / 100f)));
+		Vector3 worldWeaponPosition = CameraLocalToWorld(weaponPosition);
+		PointF mount = ProjectWorldToScreen(worldWeaponPosition - (direction * (recoil / 100f)));
+		PointF muzzle = ProjectWorldToScreen(worldWeaponPosition + (direction * 0.85f) - (direction * (recoil / 100f)));
+		PointF shoulder = ProjectWorldToScreen(worldWeaponPosition - (direction * 0.85f) - (direction * (recoil / 100f)));
 		PointF bodyCenter = Midpoint(mount, muzzle);
 		PointF screenDirection = NormalizeScreenDirection(mount, muzzle);
 		PointF normal = new(-screenDirection.Y, screenDirection.X);
@@ -455,13 +501,13 @@ internal sealed class GameForm : Form
 			(crosshair.X - (ClientSize.Width * 0.5f)) / FocalLength,
 			((ClientSize.Height * 0.43f) - crosshair.Y) / FocalLength,
 			1f));
-		Vector3 aimPoint = CameraPosition + (cameraRay * AimDistance);
-		return Vector3.Normalize(aimPoint - weaponPosition);
+		Vector3 aimPoint = CameraLocalToWorld(cameraRay * AimDistance);
+		return Vector3.Normalize(aimPoint - CameraLocalToWorld(weaponPosition));
 	}
 
 	private PointF ProjectWorldToScreen(Vector3 worldPosition)
 	{
-		Vector3 relative = worldPosition - CameraPosition;
+		Vector3 relative = WorldToCameraLocal(worldPosition);
 		float depth = MathF.Max(0.25f, relative.Z);
 		return new PointF(
 			(ClientSize.Width * 0.5f) + (relative.X * FocalLength / depth),
@@ -470,7 +516,7 @@ internal sealed class GameForm : Form
 
 	private bool TryProjectWorldToScreen(Vector3 worldPosition, out PointF screenPosition)
 	{
-		Vector3 relative = worldPosition - CameraPosition;
+		Vector3 relative = WorldToCameraLocal(worldPosition);
 		if (relative.Z <= 0.1f)
 		{
 			screenPosition = PointF.Empty;
@@ -479,6 +525,51 @@ internal sealed class GameForm : Form
 
 		screenPosition = ProjectWorldToScreen(worldPosition);
 		return true;
+	}
+
+	private Vector3 CameraLocalToWorld(Vector3 localPosition)
+	{
+		return playerPosition + new Vector3(0f, CameraHeight, 0f) + RotateCameraLocal(localPosition);
+	}
+
+	private Vector3 WorldToCameraLocal(Vector3 worldPosition)
+	{
+		Vector3 relative = worldPosition - (playerPosition + new Vector3(0f, CameraHeight, 0f));
+		return InverseRotateCameraLocal(relative);
+	}
+
+	private Vector3 GetCameraForwardOnGround()
+	{
+		return Vector3.Normalize(new Vector3(MathF.Sin(cameraYaw), 0f, MathF.Cos(cameraYaw)));
+	}
+
+	private Vector3 RotateCameraLocal(Vector3 local)
+	{
+		float pitchCos = MathF.Cos(cameraPitch);
+		float pitchSin = MathF.Sin(cameraPitch);
+		Vector3 pitched = new(local.X, (local.Y * pitchCos) + (local.Z * pitchSin), (-local.Y * pitchSin) + (local.Z * pitchCos));
+		float yawCos = MathF.Cos(cameraYaw);
+		float yawSin = MathF.Sin(cameraYaw);
+		return new Vector3(
+			(pitched.X * yawCos) + (pitched.Z * yawSin),
+			pitched.Y,
+			(-pitched.X * yawSin) + (pitched.Z * yawCos));
+	}
+
+	private Vector3 InverseRotateCameraLocal(Vector3 worldRelative)
+	{
+		float yawCos = MathF.Cos(cameraYaw);
+		float yawSin = MathF.Sin(cameraYaw);
+		Vector3 yawRemoved = new(
+			(worldRelative.X * yawCos) - (worldRelative.Z * yawSin),
+			worldRelative.Y,
+			(worldRelative.X * yawSin) + (worldRelative.Z * yawCos));
+		float pitchCos = MathF.Cos(cameraPitch);
+		float pitchSin = MathF.Sin(cameraPitch);
+		return new Vector3(
+			yawRemoved.X,
+			(yawRemoved.Y * pitchCos) - (yawRemoved.Z * pitchSin),
+			(yawRemoved.Y * pitchSin) + (yawRemoved.Z * pitchCos));
 	}
 
 	private static PointF NormalizeScreenDirection(PointF from, PointF to)

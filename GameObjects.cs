@@ -16,7 +16,8 @@ internal sealed record RawMouseMovement(
 	string DeviceName,
 	int DeltaX,
 	int DeltaY,
-	ushort ButtonFlags);
+	ushort ButtonFlags,
+	ushort ButtonData);
 
 internal sealed class ProjectileTracer
 {

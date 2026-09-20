@@ -7,7 +7,12 @@ internal sealed class RawMouseInput : IDisposable
 {
 	internal const int WmInput = 0x00FF;
 	internal const ushort LeftButtonDown = 0x0001;
+	internal const ushort LeftButtonUp = 0x0002;
+	internal const ushort MiddleButtonDown = 0x0010;
+	internal const ushort MiddleButtonUp = 0x0020;
 	internal const ushort RightButtonDown = 0x0004;
+	internal const ushort RightButtonUp = 0x0008;
+	internal const ushort MouseWheel = 0x0400;
 
 	private const uint RidInput = 0x10000003;
 	private const uint RidevInputSink = 0x00000100;
@@ -102,7 +107,8 @@ internal sealed class RawMouseInput : IDisposable
 				GetDeviceName(header.Device),
 				mouse.LastX,
 				mouse.LastY,
-				mouse.Buttons.ButtonFlags));
+				mouse.Buttons.ButtonFlags,
+				mouse.Buttons.ButtonData));
 		}
 		finally
 		{
