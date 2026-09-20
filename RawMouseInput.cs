@@ -3,7 +3,7 @@ using System.Text;
 
 namespace LoopGame;
 
-internal sealed class RawMouseInput : NativeWindow, IDisposable
+internal sealed class RawMouseInput : IDisposable
 {
 	private const uint RidInput = 0x10000003;
 	private const uint RidevInputSink = 0x00000100;
@@ -19,8 +19,6 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 
 	public RawMouseInput(IntPtr windowHandle)
 	{
-		AssignHandle(windowHandle);
-
 		var devices = new RawInputDevice[]
 		{
 			new()
@@ -38,22 +36,21 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 		}
 	}
 
-	protected override void WndProc(ref Message message)
+	public void ProcessWindowMessage(IntPtr inputHandle)
 	{
-		if (message.Msg == WmInput)
-		{
-			ProcessInput(message.LParam);
-		}
+		ProcessInput(inputHandle);
+	}
 
-		base.WndProc(ref message);
+	public bool HandlesMessage(int message)
+	{
+		return message == WmInput;
 	}
 
 	private void ProcessInput(IntPtr inputHandle)
 	{
 		uint dataSize = 0;
-		GetRawInputData(inputHandle, RidInput, IntPtr.Zero, ref dataSize, (uint)Marshal.SizeOf<RawInputHeader>());
-
-		if (dataSize == 0)
+		uint queryResult = GetRawInputData(inputHandle, RidInput, IntPtr.Zero, ref dataSize, (uint)Marshal.SizeOf<RawInputHeader>());
+		if (queryResult == uint.MaxValue || dataSize < (uint)Marshal.SizeOf<RawInputHeader>())
 		{
 			return;
 		}
@@ -77,11 +74,6 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 			ushort buttonFlags = (ushort)Marshal.ReadInt16(buffer, mouseOffset + 2);
 			int deltaX = Marshal.ReadInt32(buffer, mouseOffset + 12);
 			int deltaY = Marshal.ReadInt32(buffer, mouseOffset + 16);
-
-			if (deltaX == 0 && deltaY == 0 && buttonFlags == 0)
-			{
-				return;
-			}
 
 			MouseMoved?.Invoke(this, new RawMouseMovement(deviceHandle, GetDeviceName(deviceHandle), deltaX, deltaY, buttonFlags));
 		}
@@ -114,7 +106,6 @@ internal sealed class RawMouseInput : NativeWindow, IDisposable
 		}
 
 		disposed = true;
-		ReleaseHandle();
 		GC.SuppressFinalize(this);
 	}
 

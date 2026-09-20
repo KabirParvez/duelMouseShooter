@@ -15,6 +15,8 @@ internal sealed class GameForm : Form
 	private PointF leftCrosshair = new(280, 330);
 	private PointF rightCrosshair = new(680, 330);
 	private string? fireIndicator;
+	private RawMouseMovement? lastRawInput;
+	private string lastRawInputType = "none";
 
 	public GameForm()
 	{
@@ -37,8 +39,21 @@ internal sealed class GameForm : Form
 		rawMouseInput.MouseMoved += OnRawMouseMoved;
 	}
 
+	protected override void WndProc(ref Message message)
+	{
+		if (rawMouseInput?.HandlesMessage(message.Msg) == true)
+		{
+			rawMouseInput.ProcessWindowMessage(message.LParam);
+		}
+
+		base.WndProc(ref message);
+	}
+
 	private void OnRawMouseMoved(object? sender, RawMouseMovement movement)
 	{
+		lastRawInput = movement;
+		lastRawInputType = GetRawInputType(movement);
+
 		if (assignmentState == AssignmentState.WaitingForLeft)
 		{
 			if ((movement.ButtonFlags & RawMouseInput.RightButtonDown) == 0)
@@ -88,6 +103,21 @@ internal sealed class GameForm : Form
 		}
 
 		Invalidate();
+	}
+
+	private static string GetRawInputType(RawMouseMovement movement)
+	{
+		if ((movement.ButtonFlags & RawMouseInput.LeftButtonDown) != 0)
+		{
+			return "left button";
+		}
+
+		if ((movement.ButtonFlags & RawMouseInput.RightButtonDown) != 0)
+		{
+			return "right button";
+		}
+
+		return movement.DeltaX != 0 || movement.DeltaY != 0 ? "movement" : "other";
 	}
 
 	private PointF MoveCrosshair(PointF current, int deltaX, int deltaY)
@@ -149,6 +179,29 @@ internal sealed class GameForm : Form
 				DrawCenteredText(graphics, fireIndicator, instructionFont, ClientSize.Height - 72, Color.FromArgb(255, 220, 120));
 			}
 		}
+
+		if (assignmentState != AssignmentState.BothHandsReady)
+		{
+			DrawRawInputDiagnostic(graphics);
+		}
+	}
+
+	private void DrawRawInputDiagnostic(Graphics graphics)
+	{
+		string device = lastRawInput is null ? "NONE" : lastRawInput.DeviceHandle.ToString();
+		string flags = lastRawInput is null ? "NONE" : $"0x{lastRawInput.ButtonFlags:X4}";
+		DrawDiagnosticText(graphics, "RAW INPUT DETECTED", 335, Color.FromArgb(255, 220, 120));
+		DrawDiagnosticText(graphics, $"Device: {device}", 370, Color.White);
+		DrawDiagnosticText(graphics, $"Type: {lastRawInputType}", 395, Color.White);
+		DrawDiagnosticText(graphics, $"Flags: {flags}", 420, Color.White);
+		DrawDiagnosticText(graphics, $"LEFT ARM DEVICE: {leftAssignment?.DeviceHandle.ToString() ?? "NONE"}", 455, Color.FromArgb(96, 239, 228));
+		DrawDiagnosticText(graphics, $"RIGHT ARM DEVICE: {rightAssignment?.DeviceHandle.ToString() ?? "NONE"}", 480, Color.FromArgb(255, 184, 92));
+	}
+
+	private void DrawDiagnosticText(Graphics graphics, string text, float y, Color color)
+	{
+		using var brush = new SolidBrush(color);
+		graphics.DrawString(text, detailFont, brush, 70, y);
 	}
 
 	private void DrawCrosshair(Graphics graphics, PointF center, Color color, string label)
